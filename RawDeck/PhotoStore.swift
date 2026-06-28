@@ -1,5 +1,5 @@
 import Foundation
-import AppKit
+@preconcurrency import AppKit
 import Combine
 
 /// The central state store for the current import session.
@@ -7,6 +7,13 @@ import Combine
 /// Holds the array of Photo objects, the current selection set, the
 /// current folder URL, and the loading-progress counter. All views
 /// observe this object via @EnvironmentObject.
+///
+/// `@preconcurrency import AppKit` silences Swift's strict-concurrency
+/// warnings about NSImage not being Sendable on macOS 13. The deployment
+/// target is 13.0 (Ventura); NSImage only became formally Sendable in
+/// macOS 14. NSImage is in practice immutable-after-decode and safe to
+/// pass across actors — the compiler just can't prove that without the
+/// annotation. `@preconcurrency` tells it to trust the legacy API.
 @MainActor
 final class PhotoStore: ObservableObject {
 
@@ -26,6 +33,17 @@ final class PhotoStore: ObservableObject {
     /// photo (per Fin B's spec: "press spacebar when hovering over an image").
     @Published var hoveredPhotoID: UUID? = nil
 
+    /// How the grid is sorted. Toolbar exposes a menu to change this.
+    @Published var sortMode: SortMode = .filenameAscending
+
+    /// Minimum star rating to show in the grid. 0 = no filter (show all).
+    /// Photos rated below this threshold are hidden but still in `photos`.
+    @Published var ratingFilter: Int = 0
+
+    /// When true, rejected photos are also hidden from the grid (in
+    /// addition to the rating filter).
+    @Published var hideRejected: Bool = false
+
     /// Currently-running import task. Cancelled when a new import starts
     /// so we never have two scans racing to write to `photos`.
     private var importTask: Task<Void, Never>? = nil
@@ -38,7 +56,28 @@ final class PhotoStore: ObservableObject {
     /// dedupe pattern as `thumbnailInFlight` for the lightbox.
     private var previewInFlight: Set<UUID> = []
 
+    // MARK: - Derived state
+
+    /// The photos to show in the grid, after applying `ratingFilter`,
+    /// `hideRejected`, and `sortMode`. SwiftUI re-evaluates this whenever
+    /// `photos`, `sortMode`, `ratingFilter`, or `hideRejected` changes,
+    /// or when any individual Photo's rating/reject flag publishes.
+    var visiblePhotos: [Photo] {
+        let filtered = photos.filter { photo in
+            if hideRejected && photo.isRejected { return false }
+            if photo.starRating < ratingFilter { return false }
+            return true
+        }
+        return filtered.sorted(by: sortMode.comparator)
+    }
+
+    /// Number of photos after filtering (before sorting). Used for the
+    /// "Showing N of M" status text.
+    var visibleCount: Int { visiblePhotos.count }
+
     /// Convenience: the currently-selected Photo objects in display order.
+    /// Selection is independent of the filter — the user can keep a
+    /// selection even if they change the filter to hide those photos.
     var selectedPhotos: [Photo] {
         photos.filter { selectedIDs.contains($0.id) }
     }
@@ -52,11 +91,13 @@ final class PhotoStore: ObservableObject {
     }
 
     /// Convenience: count of photos at each star rating (for the status bar).
+    /// Counts against the RAW `photos` array — the user wants to see how
+    /// many 5-stars they've rated in total, not just how many are visible.
     func count(rating: Int) -> Int {
         photos.filter { $0.starRating == rating }.count
     }
 
-    /// Convenience: count of rejected photos.
+    /// Convenience: count of rejected photos (across all photos).
     var rejectedCount: Int { photos.filter { $0.isRejected }.count }
 
     // MARK: - Import
@@ -123,22 +164,21 @@ final class PhotoStore: ObservableObject {
                 if Task.isCancelled { break }
                 let id = photo.id
                 let url = photo.url
+                // Capture the Sendable bits only; the Photo object itself
+                // doesn't cross actor boundaries.
                 let thumb = await Task.detached(priority: .userInitiated) {
                     ThumbnailService.generateThumbnail(for: url)
                 }.value
-                guard thumb != nil else {
-                    await MainActor.run { [weak self] in
-                        self?.thumbnailInFlight.remove(id)
-                    }
-                    continue
-                }
                 // Hop to main to mutate Photo (@MainActor) and the in-flight set.
-                await MainActor.run { [weak self] in
-                    guard let self = self,
-                          let p = self.photos.first(where: { $0.id == id }),
-                          let thumb = thumb else { return }
-                    p.thumbnail = thumb
+                // Using `_ =` discards the Void result of MainActor.run so
+                // the compiler doesn't warn about the unused return value.
+                _ = await MainActor.run { [weak self] in
+                    guard let self = self else { return }
                     self.thumbnailInFlight.remove(id)
+                    if let thumb = thumb,
+                       let p = self.photos.first(where: { $0.id == id }) {
+                        p.thumbnail = thumb
+                    }
                 }
             }
         }
@@ -163,7 +203,7 @@ final class PhotoStore: ObservableObject {
             let preview = await Task.detached(priority: .userInitiated) {
                 ThumbnailService.generatePreview(for: url)
             }.value
-            await MainActor.run { [weak self] in
+            _ = await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.previewInFlight.remove(id)
                 if let preview = preview,
@@ -186,7 +226,9 @@ final class PhotoStore: ObservableObject {
     }
 
     func selectAll() {
-        selectedIDs = Set(photos.map { $0.id })
+        // Select all VISIBLE photos — if a filter is active, "all" means
+        // "all you can see right now", which is what Photo Mechanic does.
+        selectedIDs = Set(visiblePhotos.map { $0.id })
     }
 
     func deselectAll() {
@@ -218,14 +260,17 @@ final class PhotoStore: ObservableObject {
     /// Open the lightbox on the given photo. Also selects it so the existing
     /// rating/reject shortcuts (`1`-`5`, `0`, `X`) target the photo being viewed.
     /// Pre-loads the current photo + immediate neighbours for smooth arrow nav.
+    ///
+    /// Navigation in the lightbox uses `visiblePhotos` so the filter applies:
+    /// if you've filtered to ★4+, the arrows skip the hidden photos.
     func openLightbox(on photo: Photo) {
         lightboxPhotoID = photo.id
         selectedIDs = [photo.id]
         loadPreview(for: photo)
         // Pre-warm the next and previous so arrow presses are instant.
-        if let idx = photos.firstIndex(where: { $0.id == photo.id }) {
-            if idx > 0 { loadPreview(for: photos[idx - 1]) }
-            if idx + 1 < photos.count { loadPreview(for: photos[idx + 1]) }
+        if let idx = visiblePhotos.firstIndex(where: { $0.id == photo.id }) {
+            if idx > 0 { loadPreview(for: visiblePhotos[idx - 1]) }
+            if idx + 1 < visiblePhotos.count { loadPreview(for: visiblePhotos[idx + 1]) }
         }
     }
 
@@ -236,21 +281,22 @@ final class PhotoStore: ObservableObject {
     }
 
     /// Navigate to the next (or previous, with negative step) photo in the
-    /// grid. No-op at the edges — the user must press Esc to leave the lightbox.
-    /// Auto-advances the selection and pre-warms the new neighbour.
+    /// VISIBLE list. No-op at the edges — the user must press Esc to leave
+    /// the lightbox. Auto-advances the selection and pre-warms the new neighbour.
     func lightboxStep(_ step: Int) {
+        let visible = visiblePhotos
         guard let current = lightboxPhoto,
-              let idx = photos.firstIndex(where: { $0.id == current.id }) else { return }
+              let idx = visible.firstIndex(where: { $0.id == current.id }) else { return }
         let next = idx + step
-        guard next >= 0, next < photos.count else { return }
-        let target = photos[next]
+        guard next >= 0, next < visible.count else { return }
+        let target = visible[next]
         lightboxPhotoID = target.id
         selectedIDs = [target.id]
         loadPreview(for: target)
         // Pre-warm the new neighbour on the side we're moving into.
         let neighbour = next + step
-        if neighbour >= 0, neighbour < photos.count {
-            loadPreview(for: photos[neighbour])
+        if neighbour >= 0, neighbour < visible.count {
+            loadPreview(for: visible[neighbour])
         }
     }
 
@@ -262,6 +308,26 @@ final class PhotoStore: ObservableObject {
         let sel = selectedPhotos
         if sel.count == 1 { return sel[0] }
         return nil
+    }
+
+    // MARK: - Filter / Sort helpers
+
+    /// Cycle ratingFilter forward through 0 → 1 → 2 → 3 → 4 → 5 → 0.
+    /// Called by the toolbar button to step through "show all", "★1+",
+    /// "★2+", ... "★5 only".
+    func cycleRatingFilter() {
+        ratingFilter = (ratingFilter + 1) % 6
+    }
+
+    /// Set ratingFilter to a specific value (0–5). 0 means "no filter".
+    func setRatingFilter(_ value: Int) {
+        ratingFilter = max(0, min(5, value))
+    }
+
+    /// Clear the rating filter and show rejected photos.
+    func resetFilters() {
+        ratingFilter = 0
+        hideRejected = false
     }
 
     // MARK: - Delete
@@ -281,18 +347,18 @@ final class PhotoStore: ObservableObject {
         if lightboxPhotoID != nil, let p = lightboxPhoto {
             let trashedID = p.id
             // Capture the position BEFORE removal so we know which way to advance.
-            let priorIdx = photos.firstIndex(where: { $0.id == trashedID })
+            let priorIdx = visiblePhotos.firstIndex(where: { $0.id == trashedID })
             photos.removeAll { $0.id == trashedID }
             selectedIDs = []
 
             // Advance the lightbox to a neighbour, or close if none left.
-            if photos.isEmpty {
+            if visiblePhotos.isEmpty {
                 lightboxPhotoID = nil
             } else {
                 // Prefer the photo at the same index (now the "next" one);
                 // fall back to the new last photo if we trashed the tail.
-                let targetIdx = min(priorIdx ?? 0, photos.count - 1)
-                let next = photos[targetIdx]
+                let targetIdx = min(priorIdx ?? 0, visiblePhotos.count - 1)
+                let next = visiblePhotos[targetIdx]
                 lightboxPhotoID = next.id
                 selectedIDs = [next.id]
                 loadPreview(for: next)
@@ -344,7 +410,7 @@ final class PhotoStore: ObservableObject {
         let targets: [Photo] = {
             if let p = photo { return [p] }
             let sel = selectedPhotos
-            return sel.isEmpty ? photos : sel
+            return sel.isEmpty ? visiblePhotos : sel
         }()
         for p in targets {
             ExternalAppService.openInPixelmator(p.url)
@@ -353,9 +419,64 @@ final class PhotoStore: ObservableObject {
 
     /// Reveal selected photos in Finder.
     func revealSelectionInFinder() {
-        let targets = selectedPhotos.isEmpty ? photos : selectedPhotos
+        let targets = selectedPhotos.isEmpty ? visiblePhotos : selectedPhotos
         for p in targets {
             ExternalAppService.revealInFinder(p.url)
+        }
+    }
+}
+
+// MARK: - SortMode
+
+/// The order the grid is rendered in. Toolbar exposes a menu to switch
+/// between these. New cases should be added here AND to the toolbar's
+/// Sort menu — the comparator is the single source of truth for ordering.
+enum SortMode: String, CaseIterable, Identifiable {
+    /// Original filename order (IMG_0001 < IMG_0002 < IMG_0010, natural sort).
+    case filenameAscending
+    /// 5-star photos first, then 4, 3, 2, 1, unrated. Within the same
+    /// rating, ties broken by filename.
+    case ratingDescending
+    /// Unrated first, then 1, 2, 3, 4, 5 stars. Within the same rating,
+    /// ties broken by filename.
+    case ratingAscending
+
+    var id: String { rawValue }
+
+    /// Human-readable label for the toolbar menu.
+    var label: String {
+        switch self {
+        case .filenameAscending: return "Filename"
+        case .ratingDescending: return "Rating (high → low)"
+        case .ratingAscending:  return "Rating (low → high)"
+        }
+    }
+
+    /// SF Symbol for the toolbar menu button.
+    var systemImage: String {
+        switch self {
+        case .filenameAscending: return "textformat.abc"
+        case .ratingDescending: return "star.fill"
+        case .ratingAscending:  return "star"
+        }
+    }
+
+    /// Comparator suitable for `Array.sorted(by:)`. All branches break
+    /// ties by filename (natural sort) so the output is deterministic.
+    var comparator: (Photo, Photo) -> Bool {
+        switch self {
+        case .filenameAscending:
+            return { $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending }
+        case .ratingDescending:
+            return { lhs, rhs in
+                if lhs.starRating != rhs.starRating { return lhs.starRating > rhs.starRating }
+                return lhs.fileName.localizedStandardCompare(rhs.fileName) == .orderedAscending
+            }
+        case .ratingAscending:
+            return { lhs, rhs in
+                if lhs.starRating != rhs.starRating { return lhs.starRating < rhs.starRating }
+                return lhs.fileName.localizedStandardCompare(rhs.fileName) == .orderedAscending
+            }
         }
     }
 }

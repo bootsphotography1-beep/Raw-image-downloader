@@ -1,9 +1,10 @@
 import SwiftUI
 import AppKit
 
-/// Top toolbar: back-to-drop-zone button, folder name, "Open in Pixelmator Pro"
-/// action, "Reveal in Finder" action, "Move to Trash" action. Plus the
-/// star-count badges (how many photos at each rating).
+/// Top toolbar: back-to-drop-zone button, folder name + count, a Sort
+/// menu (Lightroom-style: single dropdown button labelled with the
+/// current sort), star-count badges, and the photo actions (Open in
+/// Pixelmator / Reveal / Trash).
 struct ToolbarView: View {
     @EnvironmentObject var store: PhotoStore
 
@@ -14,6 +15,7 @@ struct ToolbarView: View {
                 store.photos = []
                 store.selectedIDs = []
                 store.currentFolder = nil
+                store.resetFilters()
             } label: {
                 Label("New Import", systemImage: "chevron.left")
             }
@@ -21,7 +23,7 @@ struct ToolbarView: View {
 
             Divider().frame(height: 20)
 
-            // Folder name
+            // Folder name + photo count
             if let folder = store.currentFolder {
                 HStack(spacing: 6) {
                     Image(systemName: "folder.fill")
@@ -34,9 +36,33 @@ struct ToolbarView: View {
                 }
             }
 
+            // Sort menu — single dropdown button labelled with the current
+            // sort. Clicking opens a menu with the three sort options.
+            // The currently-active one has a checkmark next to it.
+            Menu {
+                ForEach(SortMode.allCases) { mode in
+                    Button {
+                        store.sortMode = mode
+                    } label: {
+                        if store.sortMode == mode {
+                            Label(mode.label, systemImage: "checkmark")
+                        } else {
+                            Text(mode.label)
+                        }
+                    }
+                }
+            } label: {
+                Label(store.sortMode.label, systemImage: store.sortMode.systemImage)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("Sort the grid by filename or star rating")
+
             Spacer()
 
-            // Star count badges
+            // Star count badges — show the TOTAL count of photos at each
+            // rating (not filtered). Helps the user see at a glance how
+            // many 5-stars they've rated in the whole session.
             HStack(spacing: 8) {
                 ForEach(1...5, id: \.self) { i in
                     let n = store.count(rating: i)
@@ -84,7 +110,7 @@ struct ToolbarView: View {
                 Label("Open in Pixelmator", systemImage: "wand.and.stars")
             }
             .disabled(store.photos.isEmpty)
-            .help("Open selected photos (or all photos) in Pixelmator Pro")
+            .help("Open selected photos (or all visible photos) in Pixelmator Pro")
 
             Button {
                 store.revealSelectionInFinder()

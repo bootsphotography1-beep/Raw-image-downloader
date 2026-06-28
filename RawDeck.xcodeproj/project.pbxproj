@@ -19,6 +19,7 @@
 		A1000010 /* ImportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000010 /* ImportService.swift */; };
 		A1000011 /* ExternalAppService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000011 /* ExternalAppService.swift */; };
 		A1000012 /* LightboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000012 /* LightboxView.swift */; };
+		A1000013 /* FilterBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000013 /* FilterBarView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -34,6 +35,7 @@
 		B1000010 /* ImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImportService.swift; sourceTree = "<group>"; };
 		B1000011 /* ExternalAppService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalAppService.swift; sourceTree = "<group>"; };
 		B1000012 /* LightboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightboxView.swift; sourceTree = "<group>"; };
+		B1000013 /* FilterBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterBarView.swift; sourceTree = "<group>"; };
 		B2000001 /* RawDeck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RawDeck.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -93,6 +95,7 @@
 				B1000007 /* ThumbnailCell.swift */,
 				B1000008 /* ToolbarView.swift */,
 				B1000012 /* LightboxView.swift */,
+				B1000013 /* FilterBarView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -187,6 +190,7 @@
 				A1000010 /* ImportService.swift in Sources */,
 				A1000011 /* ExternalAppService.swift in Sources */,
 				A1000012 /* LightboxView.swift in Sources */,
+				A1000013 /* FilterBarView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -8,6 +8,7 @@ Built natively in SwiftUI for photographers who don't want to pay for PhotoMecha
 
 - 🖱️ **Drag-and-drop import** — drop a folder of RAWs, get instant previews
 - 🔦 **Lightbox viewer** — hover an image and press `Space` to open it full-screen with a thumbnail strip of every photo along the bottom. Navigate with `←` / `→`. Press `Esc` (or `Space` again) to close.
+- 🔃 **Sort & filter** — Lightroom-style. The toolbar has a Sort dropdown (`Filename`, `Rating ↓`, `Rating ↑`). Below it, a filter bar lets you set a rating floor (★1+, ★2+, …, ★5 only) and toggle rejected-photo visibility. Arrows in the lightbox respect the filter.
 - ⭐ **5-star rating** — press `1`–`5` to rate, `0` to clear. Works in both grid and lightbox modes; in the lightbox the number keys always rate the photo you're currently viewing.
 - ❌ **Quick reject** — press `X` to mark a photo as rejected
 - 🗑️ **Trash or remove** — press `Delete` to send selected (or all rejected) photos to the macOS Trash (recoverable)
@@ -108,9 +109,10 @@ To run the app **outside** Xcode (as a standalone `.app`):
 ## Architecture
 
 - **`RawDeckApp.swift`** — app entry point, scene, command menu, hidden key-button helper
-- **`Views/ContentView.swift`** — main window: drop zone OR toolbar + grid + status bar; hosts the no-modifier keyboard shortcuts (rating, lightbox open/close, arrow-nav, esc)
+- **`Views/ContentView.swift`** — main window: drop zone OR toolbar + filter bar + grid + status bar; hosts the no-modifier keyboard shortcuts (rating, lightbox open/close, arrow-nav, esc)
 - **`Views/LightboxView.swift`** — full-screen photo viewer overlay: large photo + bottom thumbnail strip + close button. Auto-scrolls the strip to keep the current photo in view.
-- **`PhotoStore.swift`** — `@MainActor`-isolated state store (selected IDs, photos array, import/load/select operations). Owns the `lightboxPhotoID` and `hoveredPhotoID` state plus `openLightbox`, `closeLightbox`, `lightboxStep`, and `loadPreview` helpers.
+- **`Views/FilterBarView.swift`** — Lightroom-style filter strip between the toolbar and grid: rating floor (★1+ … ★5 only), reject toggle, "Showing N of M" status.
+- **`PhotoStore.swift`** — `@MainActor`-isolated state store (selected IDs, photos array, import/load/select operations). Owns the `lightboxPhotoID` and `hoveredPhotoID` state plus `openLightbox`, `closeLightbox`, `lightboxStep`, and `loadPreview` helpers. Holds `sortMode` / `ratingFilter` / `hideRejected` and exposes `visiblePhotos` (filter-then-sort). `SortMode` enum (filename / rating ↓ / rating ↑) lives in the same file.
 - **`Models/Photo.swift`** — single photo: file URL, star rating, reject flag, lazy-loaded thumbnail + 1600px preview
 - **`Services/ThumbnailService.swift`** — uses `CGImageSourceCreateThumbnailAtIndex` to generate previews from RAW files. Two sizes: 512px (grid thumbnail) and 1600px (lightbox preview).
 - **`Services/ImportService.swift`** — recursive folder scan, RAW file filter, natural sort

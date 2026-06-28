@@ -24,6 +24,8 @@ struct ContentView: View {
                     VStack(spacing: 0) {
                         ToolbarView()
                         Divider()
+                        FilterBarView()
+                        Divider()
                         PhotoGridView()
                         StatusBarView()
                     }
