@@ -21,6 +21,7 @@ final class Photo: Identifiable, ObservableObject {
     @Published var starRating: Int = 0   // 0–5
     @Published var isRejected: Bool = false
     @Published var thumbnail: NSImage? = nil  // lazy-loaded by ThumbnailService
+    @Published var preview: NSImage? = nil     // larger (1600px) lazy-loaded preview for the lightbox
 
     init(url: URL) {
         self.url = url

@@ -54,13 +54,26 @@ struct ThumbnailCell: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 0)
                     .strokeBorder(
-                        isSelected ? Color.accentColor : Color.clear,
+                        isSelected ? Color.accentColor :
+                            (store.hoveredPhotoID == photo.id ? Color.white.opacity(0.6) : Color.clear),
                         lineWidth: 3
                     )
             )
             .background(
                 Color.black.opacity(isSelected ? 0.04 : 0)
             )
+            // Track hover so the spacebar (handled in ContentView) knows
+            // which photo to open the lightbox on. SwiftUI's onHover is
+            // a simple in/out callback — we mirror the state to the store.
+            .onHover { hovering in
+                if hovering {
+                    store.hoveredPhotoID = photo.id
+                } else if store.hoveredPhotoID == photo.id {
+                    // Don't clear if the cursor moved onto another cell —
+                    // that cell's onHover will overwrite the value first.
+                    store.hoveredPhotoID = nil
+                }
+            }
 
             // Filename + stars
             VStack(spacing: 2) {
@@ -97,6 +110,9 @@ struct ThumbnailCell: View {
             store.select(photo.id, additive: additive)
         }
         .contextMenu {
+            Button("Open Lightbox") {
+                store.openLightbox(on: photo)
+            }
             Button("Open in Pixelmator Pro") {
                 store.openSelectionInPixelmator(photo: photo)
             }

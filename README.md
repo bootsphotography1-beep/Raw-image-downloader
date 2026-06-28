@@ -7,7 +7,8 @@ Built natively in SwiftUI for photographers who don't want to pay for PhotoMecha
 ## Features
 
 - 🖱️ **Drag-and-drop import** — drop a folder of RAWs, get instant previews
-- ⭐ **5-star rating** — press `1`–`5` to rate, `0` to clear
+- 🔦 **Lightbox viewer** — hover an image and press `Space` to open it full-screen with a thumbnail strip of every photo along the bottom. Navigate with `←` / `→`. Press `Esc` (or `Space` again) to close.
+- ⭐ **5-star rating** — press `1`–`5` to rate, `0` to clear. Works in both grid and lightbox modes; in the lightbox the number keys always rate the photo you're currently viewing.
 - ❌ **Quick reject** — press `X` to mark a photo as rejected
 - 🗑️ **Trash or remove** — press `Delete` to send selected (or all rejected) photos to the macOS Trash (recoverable)
 - 🎨 **Open in Pixelmator Pro** — press `⌘⇧O` or double-click to open the selected photo(s) in Pixelmator Pro. Edits save back to the source folder automatically.
@@ -71,26 +72,31 @@ To run the app **outside** Xcode (as a standalone `.app`):
 
 | Shortcut | Action |
 |---|---|
-| `1` – `5` | Set star rating (1 = weak, 5 = keeper) |
+| `1` – `5` | Set star rating (1 = weak, 5 = keeper). Targets the lightbox photo if open, else the selection. |
 | `0` | Clear star rating |
 | `X` | Toggle reject flag |
-| `Delete` | Move selected (or all rejected) to Trash |
+| `Space` *(hovering an image)* | Open lightbox on that photo |
+| `Space` *(lightbox open)* | Close lightbox |
+| `←` / `→` | Previous / next photo (lightbox only) |
+| `Esc` | Close lightbox (or clear selection in grid) |
+| `Delete` | Move selected (or all rejected) to Trash. In lightbox mode, trashes the current photo. |
 | `⌘A` | Select all |
-| `Esc` | Clear selection |
+| `Esc` *(grid)* | Clear selection |
 | `⌘O` | Import folder |
 | `⌘⇧O` | Open selection in Pixelmator Pro |
 | `⌘⇧R` | Reveal in Finder |
 | Double-click | Open single photo in Pixelmator Pro |
-| Right-click | Context menu (Open in Pixelmator / Reveal in Finder / Trash) |
+| Right-click | Context menu (Open Lightbox / Open in Pixelmator / Reveal in Finder / Trash) |
 
 ### Workflow
 
 1. **Connect your SD card or SSD.** A card reader will mount it as `/Volumes/...`.
 2. **Drag the `DCIM/100CANON` (or similar) folder into the RawDeck window** (or press `⌘O`).
 3. **Browse the grid.** Use `1`–`5` to rate keepers, `X` to reject duds.
-4. **Press `Delete`** to trash all rejected photos (or select specific photos first, then `Delete` to trash just those).
-5. **Select the keepers you want to edit** (or press `⌘A` for all rated 3+).
-6. **Press `⌘⇧O`** to open them in Pixelmator Pro. Edit, save, done — your edits save back to the original RAW file's location.
+4. **Hover a photo and press `Space`** to open the lightbox. Use `←` / `→` to flick through quickly; press `1`–`5` to rate as you go. Press `Esc` or `Space` to close.
+5. **Press `Delete`** to trash all rejected photos (or select specific photos first, then `Delete` to trash just those).
+6. **Select the keepers you want to edit** (or press `⌘A` for all rated 3+).
+7. **Press `⌘⇧O`** to open them in Pixelmator Pro. Edit, save, done — your edits save back to the original RAW file's location.
 
 ## Important notes
 
@@ -102,15 +108,16 @@ To run the app **outside** Xcode (as a standalone `.app`):
 ## Architecture
 
 - **`RawDeckApp.swift`** — app entry point, scene, command menu, hidden key-button helper
-- **`Views/ContentView.swift`** — main window: drop zone OR toolbar + grid + status bar; hosts the no-modifier rating shortcuts
-- **`PhotoStore.swift`** — `@MainActor`-isolated state store (selected IDs, photos array, import/load/select operations)
-- **`Models/Photo.swift`** — single photo: file URL, star rating, reject flag, lazy-loaded thumbnail
-- **`Services/ThumbnailService.swift`** — uses `CGImageSourceCreateThumbnailAtIndex` to generate 512px previews from RAW files
+- **`Views/ContentView.swift`** — main window: drop zone OR toolbar + grid + status bar; hosts the no-modifier keyboard shortcuts (rating, lightbox open/close, arrow-nav, esc)
+- **`Views/LightboxView.swift`** — full-screen photo viewer overlay: large photo + bottom thumbnail strip + close button. Auto-scrolls the strip to keep the current photo in view.
+- **`PhotoStore.swift`** — `@MainActor`-isolated state store (selected IDs, photos array, import/load/select operations). Owns the `lightboxPhotoID` and `hoveredPhotoID` state plus `openLightbox`, `closeLightbox`, `lightboxStep`, and `loadPreview` helpers.
+- **`Models/Photo.swift`** — single photo: file URL, star rating, reject flag, lazy-loaded thumbnail + 1600px preview
+- **`Services/ThumbnailService.swift`** — uses `CGImageSourceCreateThumbnailAtIndex` to generate previews from RAW files. Two sizes: 512px (grid thumbnail) and 1600px (lightbox preview).
 - **`Services/ImportService.swift`** — recursive folder scan, RAW file filter, natural sort
 - **`Services/ExternalAppService.swift`** — "Open in Pixelmator" via `NSWorkspace`, "Move to Trash" via `FileManager.trashItem`
 - **`Views/DropZoneView.swift`** — empty state, drag-and-drop target
 - **`Views/PhotoGridView.swift`** — `LazyVGrid` of `ThumbnailCell`s
-- **`Views/ThumbnailCell.swift`** — single thumbnail + star row + reject X, with double-click → Pixelmator
+- **`Views/ThumbnailCell.swift`** — single thumbnail + star row + reject X; tracks hover state for the spacebar-open-lightbox gesture; double-click → Pixelmator
 - **`Views/ToolbarView.swift`** — top action bar
 
 ## License

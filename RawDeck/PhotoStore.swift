@@ -17,6 +17,15 @@ final class PhotoStore: ObservableObject {
     @Published var loadingProgress: (done: Int, total: Int) = (0, 0)
     @Published var lastError: String? = nil
 
+    /// When non-nil, the lightbox is open and showing this photo.
+    /// The id is used (not the Photo directly) so views can resolve the
+    /// live Photo instance from `photos` — preserving @ObservedObject updates.
+    @Published var lightboxPhotoID: UUID? = nil
+
+    /// Currently-hovered photo id. The spacebar opens the lightbox on this
+    /// photo (per Fin B's spec: "press spacebar when hovering over an image").
+    @Published var hoveredPhotoID: UUID? = nil
+
     /// Currently-running import task. Cancelled when a new import starts
     /// so we never have two scans racing to write to `photos`.
     private var importTask: Task<Void, Never>? = nil
@@ -25,9 +34,21 @@ final class PhotoStore: ObservableObject {
     /// "thundering herd" of N cells all kicking off the same decode.
     private var thumbnailInFlight: Set<UUID> = []
 
+    /// Photos whose 1600px preview is currently being generated. Same
+    /// dedupe pattern as `thumbnailInFlight` for the lightbox.
+    private var previewInFlight: Set<UUID> = []
+
     /// Convenience: the currently-selected Photo objects in display order.
     var selectedPhotos: [Photo] {
         photos.filter { selectedIDs.contains($0.id) }
+    }
+
+    /// Convenience: the photo currently shown in the lightbox, if any.
+    /// Resolves the id against `photos` so the live @ObservedObject is
+    /// returned (not a stale copy).
+    var lightboxPhoto: Photo? {
+        guard let id = lightboxPhotoID else { return nil }
+        return photos.first { $0.id == id }
     }
 
     /// Convenience: count of photos at each star rating (for the status bar).
@@ -50,6 +71,9 @@ final class PhotoStore: ObservableObject {
         lastError = nil
         photos = []
         selectedIDs = []
+        // Always close the lightbox on a fresh import.
+        lightboxPhotoID = nil
+        hoveredPhotoID = nil
 
         // Capture only the URL (a value type) and the directory enumeration
         // happens on a detached task; we hop back to MainActor to publish.
@@ -100,6 +124,31 @@ final class PhotoStore: ObservableObject {
         }
     }
 
+    // MARK: - Previews (for the lightbox)
+
+    /// Lazy-load a 1600px preview for a single photo. Dedupes via
+    /// `previewInFlight`. Called when the lightbox opens on a photo and
+    /// when navigating to neighbours so the next arrow-press is instant.
+    func loadPreview(for photo: Photo) {
+        guard photo.preview == nil, !previewInFlight.contains(photo.id) else { return }
+        previewInFlight.insert(photo.id)
+        let id = photo.id
+        let url = photo.url
+        Task { [weak self] in
+            let preview = await Task.detached(priority: .userInitiated) {
+                ThumbnailService.generatePreview(for: url)
+            }.value
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.previewInFlight.remove(id)
+                if let preview = preview,
+                   let p = self.photos.first(where: { $0.id == id }) {
+                    p.preview = preview
+                }
+            }
+        }
+    }
+
     // MARK: - Selection
 
     func select(_ id: UUID, additive: Bool = false) {
@@ -139,6 +188,57 @@ final class PhotoStore: ObservableObject {
         for p in targets { p.isRejected.toggle() }
     }
 
+    // MARK: - Lightbox
+
+    /// Open the lightbox on the given photo. Also selects it so the existing
+    /// rating/reject shortcuts (`1`-`5`, `0`, `X`) target the photo being viewed.
+    /// Pre-loads the current photo + immediate neighbours for smooth arrow nav.
+    func openLightbox(on photo: Photo) {
+        lightboxPhotoID = photo.id
+        selectedIDs = [photo.id]
+        loadPreview(for: photo)
+        // Pre-warm the next and previous so arrow presses are instant.
+        if let idx = photos.firstIndex(where: { $0.id == photo.id }) {
+            if idx > 0 { loadPreview(for: photos[idx - 1]) }
+            if idx + 1 < photos.count { loadPreview(for: photos[idx + 1]) }
+        }
+    }
+
+    /// Close the lightbox. Selection is preserved so the user can keep
+    /// working with the last-viewed photo (or any selection they had).
+    func closeLightbox() {
+        lightboxPhotoID = nil
+    }
+
+    /// Navigate to the next (or previous, with negative step) photo in the
+    /// grid. No-op at the edges — the user must press Esc to leave the lightbox.
+    /// Auto-advances the selection and pre-warms the new neighbour.
+    func lightboxStep(_ step: Int) {
+        guard let current = lightboxPhoto,
+              let idx = photos.firstIndex(where: { $0.id == current.id }) else { return }
+        let next = idx + step
+        guard next >= 0, next < photos.count else { return }
+        let target = photos[next]
+        lightboxPhotoID = target.id
+        selectedIDs = [target.id]
+        loadPreview(for: target)
+        // Pre-warm the new neighbour on the side we're moving into.
+        let neighbour = next + step
+        if neighbour >= 0, neighbour < photos.count {
+            loadPreview(for: photos[neighbour])
+        }
+    }
+
+    /// The photo being viewed in the lightbox, or the first selected photo,
+    /// or nil. Used as the implicit target for the number-key shortcuts so
+    /// "1-5 correlate with stars" works in both grid and lightbox modes.
+    var ratingTarget: Photo? {
+        if let p = lightboxPhoto { return p }
+        let sel = selectedPhotos
+        if sel.count == 1 { return sel[0] }
+        return nil
+    }
+
     // MARK: - Delete
 
     /// Move selected photos (or all rejects if no selection) to the Trash.
@@ -148,6 +248,39 @@ final class PhotoStore: ObservableObject {
     /// the main thread is not blocked when trashing a large selection.
     @discardableResult
     func trashSelection() -> Int {
+        // Lightbox mode: trash the currently-viewed photo, even if the
+        // grid selection is empty. After removal, advance to a neighbour
+        // (next photo in the list, or previous if at the end) so the
+        // user can keep culling without an extra Esc/click. If the grid
+        // is now empty, close the lightbox.
+        if lightboxPhotoID != nil, let p = lightboxPhoto {
+            let trashedID = p.id
+            // Capture the position BEFORE removal so we know which way to advance.
+            let priorIdx = photos.firstIndex(where: { $0.id == trashedID })
+            photos.removeAll { $0.id == trashedID }
+            selectedIDs = []
+
+            // Advance the lightbox to a neighbour, or close if none left.
+            if photos.isEmpty {
+                lightboxPhotoID = nil
+            } else {
+                // Prefer the photo at the same index (now the "next" one);
+                // fall back to the new last photo if we trashed the tail.
+                let targetIdx = min(priorIdx ?? 0, photos.count - 1)
+                let next = photos[targetIdx]
+                lightboxPhotoID = next.id
+                selectedIDs = [next.id]
+                loadPreview(for: next)
+            }
+
+            let url = p.url
+            Task { [weak self] in
+                _ = await ExternalAppService.moveToTrash(url)
+                _ = self
+            }
+            return 1
+        }
+
         let toTrash: [Photo] = {
             let sel = selectedPhotos
             if !sel.isEmpty { return sel }
