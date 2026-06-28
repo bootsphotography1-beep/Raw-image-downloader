@@ -2,6 +2,19 @@ import Foundation
 @preconcurrency import AppKit
 import Combine
 
+/// Sendable wrapper for `NSImage` to allow it to cross actor boundaries
+/// (e.g. Task.detached) on macOS 13, where `NSImage` is not formally
+/// `Sendable`. `NSImage` is reference-counted and effectively immutable
+/// after decoding (we never mutate one in-place), so this is safe in
+/// practice. The `@unchecked` skips the compiler's Sendable check.
+///
+/// On macOS 14+ this becomes unnecessary (NSImage gains Sendable conformance
+/// automatically), but the deployment target is 13.0 so we need this shim
+/// for the foreseeable future.
+struct SendableImage: @unchecked Sendable {
+    let image: NSImage
+}
+
 /// The central state store for the current import session.
 ///
 /// Holds the array of Photo objects, the current selection set, the
@@ -165,9 +178,11 @@ final class PhotoStore: ObservableObject {
                 let id = photo.id
                 let url = photo.url
                 // Capture the Sendable bits only; the Photo object itself
-                // doesn't cross actor boundaries.
-                let thumb = await Task.detached(priority: .userInitiated) {
-                    ThumbnailService.generateThumbnail(for: url)
+                // doesn't cross actor boundaries. NSImage is wrapped in a
+                // `@unchecked Sendable` box (see SendableImage) because it's
+                // not formally Sendable on macOS 13.
+                let wrapped = await Task.detached(priority: .userInitiated) {
+                    SendableImage(image: ThumbnailService.generateThumbnail(for: url) ?? NSImage())
                 }.value
                 // Hop to main to mutate Photo (@MainActor) and the in-flight set.
                 // Using `_ =` discards the Void result of MainActor.run so
@@ -175,7 +190,10 @@ final class PhotoStore: ObservableObject {
                 _ = await MainActor.run { [weak self] in
                     guard let self = self else { return }
                     self.thumbnailInFlight.remove(id)
-                    if let thumb = thumb,
+                    let thumb = wrapped.image
+                    // SendableImage defaults to a zero-size NSImage when the
+                    // generator returned nil; skip those.
+                    if thumb.size.width > 0,
                        let p = self.photos.first(where: { $0.id == id }) {
                         p.thumbnail = thumb
                     }
@@ -200,13 +218,14 @@ final class PhotoStore: ObservableObject {
         let id = photo.id
         let url = photo.url
         Task { [weak self] in
-            let preview = await Task.detached(priority: .userInitiated) {
-                ThumbnailService.generatePreview(for: url)
+            let wrapped = await Task.detached(priority: .userInitiated) {
+                SendableImage(image: ThumbnailService.generatePreview(for: url) ?? NSImage())
             }.value
             _ = await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.previewInFlight.remove(id)
-                if let preview = preview,
+                let preview = wrapped.image
+                if preview.size.width > 0,
                    let p = self.photos.first(where: { $0.id == id }) {
                     p.preview = preview
                 }
@@ -431,6 +450,12 @@ final class PhotoStore: ObservableObject {
 /// The order the grid is rendered in. Toolbar exposes a menu to switch
 /// between these. New cases should be added here AND to the toolbar's
 /// Sort menu — the comparator is the single source of truth for ordering.
+///
+/// `@MainActor` because the comparator closure accesses `Photo` properties
+/// (`starRating`, `fileName`), all of which are `@MainActor`-isolated. The
+/// comparator is only invoked from `PhotoStore.visiblePhotos`, which runs
+/// on the main actor, so this is always safe at runtime.
+@MainActor
 enum SortMode: String, CaseIterable, Identifiable {
     /// Original filename order (IMG_0001 < IMG_0002 < IMG_0010, natural sort).
     case filenameAscending
@@ -463,6 +488,10 @@ enum SortMode: String, CaseIterable, Identifiable {
 
     /// Comparator suitable for `Array.sorted(by:)`. All branches break
     /// ties by filename (natural sort) so the output is deterministic.
+    ///
+    /// Marked `@MainActor` because Photo's `starRating` and `fileName`
+    /// are main-actor isolated. The comparator is only ever called from
+    /// `PhotoStore.visiblePhotos` (also main-actor), so this is safe.
     var comparator: (Photo, Photo) -> Bool {
         switch self {
         case .filenameAscending:
