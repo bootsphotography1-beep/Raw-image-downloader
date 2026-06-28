@@ -61,10 +61,24 @@ struct DropZoneView: View {
 
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         guard let provider = providers.first else { return false }
-        // URL doesn't directly conform to NSItemProviderReading on macOS —
-        // we have to ask for NSURL and then bridge to URL.
-        _ = provider.loadObject(ofClass: NSURL.self) { nsurl, _ in
-            guard let url = nsurl as URL? else { return }
+        // `NSItemProvider.loadItem(forTypeIdentifier:)` is the most reliable
+        // way to get a URL out of a drag-and-drop on macOS — the provider
+        // hands us the item as `Data` (the bookmark/file-url blob) or, in
+        // some configurations, an already-coerced `URL`. We try the
+        // fast-path (URL directly) first and fall back to decoding the
+        // data representation.
+        provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier) { item, _ in
+            let url: URL? = {
+                if let url = item as? URL { return url }
+                if let data = item as? Data {
+                    return URL(dataRepresentation: data, relativeTo: nil)
+                }
+                if let str = item as? String { return URL(string: str) }
+                return nil
+            }()
+            guard let url = url else { return }
+            // loadItem's completion runs on a background queue — hop to
+            // main before touching the store (PhotoStore is @MainActor).
             Task { @MainActor in
                 store.importFolder(url)
             }
