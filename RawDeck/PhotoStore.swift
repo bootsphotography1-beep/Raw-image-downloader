@@ -63,6 +63,12 @@ final class PhotoStore: ObservableObject {
 
     /// Import a folder of RAWs. Replaces the current session.
     /// If a previous import is in progress it is cancelled.
+    ///
+    /// Threading:
+    /// - The directory enumeration runs on a detached task (`ImportService.importFolder`)
+    ///   so a folder with thousands of files doesn't jank the UI.
+    /// - We hop back to the main actor before constructing `Photo` instances
+    ///   (which is `@MainActor`) and before mutating `photos`.
     func importFolder(_ url: URL) {
         importTask?.cancel()
         currentFolder = url
@@ -75,10 +81,10 @@ final class PhotoStore: ObservableObject {
         lightboxPhotoID = nil
         hoveredPhotoID = nil
 
-        // Capture only the URL (a value type) and the directory enumeration
-        // happens on a detached task; we hop back to MainActor to publish.
         importTask = Task { [weak self] in
-            let imported = await Task.detached(priority: .userInitiated) {
+            // Off-main: enumerate the folder. Returns [URL] — no Photo
+            // construction happens here, so we're free of @MainActor.
+            let urls = await Task.detached(priority: .userInitiated) {
                 ImportService.importFolder(at: url)
             }.value
 
@@ -86,8 +92,10 @@ final class PhotoStore: ObservableObject {
             // If the user kicked off another import while we were running,
             // `importTask` now points at a newer task and we should bail.
             guard !Task.isCancelled else { return }
-            self.photos = imported
-            self.loadingProgress = (0, imported.count)
+            // Back on the main actor (this Task is implicit-main because
+            // `self` is @MainActor). Build Photo instances and publish.
+            self.photos = urls.map { Photo(url: $0) }
+            self.loadingProgress = (0, urls.count)
             self.isLoading = false
         }
     }
@@ -96,6 +104,11 @@ final class PhotoStore: ObservableObject {
 
     /// Lazy-load thumbnails for visible cells. Dedupes via `thumbnailInFlight`
     /// so the same photo is never decoded more than once concurrently.
+    ///
+    /// Threading:
+    /// - The CPU-heavy RAW decode runs on a detached task.
+    /// - We hop back to the main actor to assign `photo.thumbnail`
+    ///   (Photo is `@MainActor`) and to update the in-flight set.
     func loadThumbnails(in range: Range<Int>) {
         guard !isLoading else { return }
         let toLoad = photos[range].filter { $0.thumbnail == nil && !thumbnailInFlight.contains($0.id) }
@@ -108,18 +121,25 @@ final class PhotoStore: ObservableObject {
         Task { [weak self] in
             for photo in toLoad {
                 if Task.isCancelled { break }
+                let id = photo.id
                 let url = photo.url
                 let thumb = await Task.detached(priority: .userInitiated) {
                     ThumbnailService.generateThumbnail(for: url)
                 }.value
-                guard let self = self, let thumb = thumb else {
+                guard thumb != nil else {
                     await MainActor.run { [weak self] in
-                        self?.thumbnailInFlight.remove(photo.id)
+                        self?.thumbnailInFlight.remove(id)
                     }
                     continue
                 }
-                photo.thumbnail = thumb
-                self.thumbnailInFlight.remove(photo.id)
+                // Hop to main to mutate Photo (@MainActor) and the in-flight set.
+                await MainActor.run { [weak self] in
+                    guard let self = self,
+                          let p = self.photos.first(where: { $0.id == id }),
+                          let thumb = thumb else { return }
+                    p.thumbnail = thumb
+                    self.thumbnailInFlight.remove(id)
+                }
             }
         }
     }
@@ -129,6 +149,11 @@ final class PhotoStore: ObservableObject {
     /// Lazy-load a 1600px preview for a single photo. Dedupes via
     /// `previewInFlight`. Called when the lightbox opens on a photo and
     /// when navigating to neighbours so the next arrow-press is instant.
+    ///
+    /// Threading:
+    /// - Decode runs on a detached task (off main).
+    /// - Assignment to `photo.preview` happens inside `MainActor.run`
+    ///   because Photo is `@MainActor`.
     func loadPreview(for photo: Photo) {
         guard photo.preview == nil, !previewInFlight.contains(photo.id) else { return }
         previewInFlight.insert(photo.id)
@@ -275,7 +300,7 @@ final class PhotoStore: ObservableObject {
 
             let url = p.url
             Task { [weak self] in
-                _ = await ExternalAppService.moveToTrash(url)
+                _ = ExternalAppService.moveToTrash(url)
                 _ = self
             }
             return 1
@@ -301,7 +326,7 @@ final class PhotoStore: ObservableObject {
         Task { [weak self] in
             var trashed = 0
             for url in urls {
-                if await ExternalAppService.moveToTrash(url) {
+                if ExternalAppService.moveToTrash(url) {
                     trashed += 1
                 }
             }

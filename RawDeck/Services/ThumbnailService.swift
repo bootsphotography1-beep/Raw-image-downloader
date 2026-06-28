@@ -9,39 +9,39 @@ import UniformTypeIdentifiers
 /// (CR3, ARW, NEF, RAF, DNG, ORF, RW2, etc.) — it uses the system RAW codecs
 /// that ship with macOS. No third-party library needed.
 ///
-/// We ask for a 512px preview, which is plenty for a thumbnail grid and
-/// renders fast even for 1000+ files.
+/// We ask for a 512px preview for the grid and 1600px for the lightbox —
+/// both render fast even for 1000+ files.
 enum ThumbnailService {
 
     /// Synchronously generate a thumbnail for the given RAW file URL.
-        /// Returns nil if the file can't be read or isn't a supported RAW format.
-        static func generateThumbnail(for url: URL, maxDimension: CGFloat = 512) -> NSImage? {
-            decode(url: url, maxDimension: maxDimension)
-        }
+    /// Returns nil if the file can't be read or isn't a supported RAW format.
+    static func generateThumbnail(for url: URL, maxDimension: CGFloat = 512) -> NSImage? {
+        decode(url: url, maxDimension: maxDimension)
+    }
 
-        /// Synchronously generate a larger preview suitable for the full-screen
-        /// lightbox view. 1600px on the long edge is plenty for a Retina display
-        /// without paying the cost of a full RAW decode on every navigation.
-        static func generatePreview(for url: URL, maxDimension: CGFloat = 1600) -> NSImage? {
-            decode(url: url, maxDimension: maxDimension)
-        }
+    /// Synchronously generate a larger preview suitable for the full-screen
+    /// lightbox view. 1600px on the long edge is plenty for a Retina display
+    /// without paying the cost of a full RAW decode on every navigation.
+    static func generatePreview(for url: URL, maxDimension: CGFloat = 1600) -> NSImage? {
+        decode(url: url, maxDimension: maxDimension)
+    }
 
-        /// Shared decoder used by both thumbnail and preview generation.
-        /// Returns nil if the file can't be read or isn't a supported RAW format.
-        private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
-            let options: [CFString: Any] = [
-                kCGImageSourceCreateThumbnailFromImageAlways: true,
-                kCGImageSourceShouldCacheImmediately: true,
-                kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: maxDimension,
-            ]
-            guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-                  let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) else {
-                return nil
-            }
-            let size = NSSize(width: cg.width, height: cg.height)
-            return NSImage(cgImage: cg, size: size)
+    /// Shared decoder used by both thumbnail and preview generation.
+    /// Returns nil if the file can't be read or isn't a supported RAW format.
+    private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+        ]
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) else {
+            return nil
         }
+        let size = NSSize(width: cg.width, height: cg.height)
+        return NSImage(cgImage: cg, size: size)
+    }
 
     /// Heuristic: is this file a RAW image that macOS can decode?
     /// Checks the file extension against a list of common RAW formats.
