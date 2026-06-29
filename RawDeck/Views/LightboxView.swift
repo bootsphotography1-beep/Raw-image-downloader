@@ -87,7 +87,7 @@ struct LightboxContents: View {
             }
             Spacer()
             // Star row for the current photo (read-only-ish; press 1-5 to change)
-            RDStarRow(rating: photo.starRating, isRejected: photo.isRejected, size: 14)
+            RDStarRow(rating: photo.starRating, size: 14, isRejected: photo.isRejected)
             // Close button
             Button {
                 store.closeLightbox()
