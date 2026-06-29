@@ -226,7 +226,19 @@ struct LightboxStripCell: View {
             .frame(width: 80, height: 80)
             .clipShape(RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous))
 
-            // Reject badge
+            // Pixelmator-sent badge (top-left) — mirrors the grid cell.
+            if photo.sentToPixelmator != nil {
+                VStack {
+                    HStack {
+                        RDPixelmatorSentBadge(size: 12)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+                .padding(2)
+            }
+
+            // Reject badge (top-right)
             if photo.isRejected {
                 Image(systemName: "xmark.circle.fill")
                     .symbolRenderingMode(.palette)

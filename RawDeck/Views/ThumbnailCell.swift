@@ -37,6 +37,21 @@ struct ThumbnailCell: View {
                                 .foregroundStyle(RDColor.textSecondary)
                         }
                     }
+
+                    // Pixelmator-sent badge — top-left of the cell, only
+                    // rendered after the user has actually opened this photo
+                    // in Pixelmator Pro (Photo.sentToPixelmator is set in
+                    // PhotoStore.openSelectionInPixelmator on a successful
+                    // launch). Top-right is reserved for the reject X.
+                    if photo.sentToPixelmator != nil {
+                        VStack {
+                            HStack {
+                                RDPixelmatorSentBadge()
+                                Spacer()
+                            }
+                            Spacer()
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity)
                 .aspectRatio(1, contentMode: .fit)

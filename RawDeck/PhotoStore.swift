@@ -499,6 +499,10 @@ final class PhotoStore: ObservableObject {
         for p in targets {
             if ExternalAppService.openInPixelmator(p.url) {
                 openedCount += 1
+                // Mark this photo as sent to Pixelmator Pro so the grid
+                // cell can render a small badge (RDColor.wand.and.stars).
+                // Session-only state — same lifetime as the star rating.
+                p.sentToPixelmator = Date()
             }
         }
         if openedCount == 0 {
