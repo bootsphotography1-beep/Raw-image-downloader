@@ -30,6 +30,12 @@ struct SendableImage: @unchecked Sendable {
 @MainActor
 final class PhotoStore: ObservableObject {
 
+    /// Which top-level mode the app is in. The mode determines what
+    /// the main content area shows and which keyboard shortcuts are
+    /// active. Library mode is the default; Presetter mode adds the
+    /// preset-extraction feature as a sibling tab.
+    @Published var mode: AppMode = .library
+
     @Published var photos: [Photo] = []
     @Published var currentFolder: URL? = nil
     @Published var selectedIDs: Set<UUID> = []
@@ -557,6 +563,44 @@ enum SortMode: String, CaseIterable, Identifiable {
                 if lhs.starRating != rhs.starRating { return lhs.starRating < rhs.starRating }
                 return lhs.fileName.localizedStandardCompare(rhs.fileName) == .orderedAscending
             }
+        }
+    }
+}
+
+// MARK: - AppMode
+
+/// Top-level mode the RawDeck window is in. Determines which content
+/// fills the main area and which keyboard shortcuts are active.
+///
+/// Currently two modes:
+/// - `.library` — the original RawDeck: import a folder, cull/rate
+///   photos, lightbox view, send to Pixelmator.
+/// - `.presetter` — paste/drop a reference image, derive a Camera
+///   Raw preset, export as .xmp or as a recreation sheet for editors
+///   that don't read XMP natively (e.g. Pixelmator Pro).
+///
+/// Adding a third mode (e.g. `.print`, `.export`) means adding a case
+/// here, a switch arm in `ContentView`, and (if needed) per-mode
+/// shortcut bindings in `RawDeckApp`.
+enum AppMode: String, CaseIterable, Identifiable {
+    case library
+    case presetter
+
+    var id: String { rawValue }
+
+    /// Display label for the segmented picker.
+    var label: String {
+        switch self {
+        case .library:   return "Library"
+        case .presetter: return "Presetter"
+        }
+    }
+
+    /// SF Symbol shown next to the label in the picker.
+    var systemImage: String {
+        switch self {
+        case .library:   return "rectangle.stack"
+        case .presetter: return "wand.and.stars"
         }
     }
 }

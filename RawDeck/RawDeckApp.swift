@@ -4,16 +4,19 @@ import AppKit
 @main
 struct RawDeckApp: App {
     @StateObject private var store = PhotoStore()
+    @StateObject private var presetter = PresetterModel()
 
     var body: some Scene {
         Window("RawDeck", id: "main") {
             ContentView()
                 .environmentObject(store)
+                .environmentObject(presetter)
         }
         .windowResizability(.contentMinSize)
         .commands {
-            // Replace the default "New" with Import Folder.
-            // Cmd+O is bound to this (the standard "open" shortcut on macOS).
+            // Replace the default "New" with mode-aware imports.
+            // Cmd+O: Library → Import Folder, Presetter → Open Image.
+            // Disabled when the action doesn't apply to the current mode.
             CommandGroup(replacing: .newItem) {
                 Button("Import Folder…") {
                     let panel = NSOpenPanel()
@@ -26,21 +29,30 @@ struct RawDeckApp: App {
                     }
                 }
                 .keyboardShortcut("o", modifiers: .command)
+                .disabled(store.mode != .library)
+
+                Button("Open Image…") {
+                    presetter.openImageViaPanel()
+                }
+                .keyboardShortcut("o", modifiers: .command)
+                .disabled(store.mode != .presetter)
             }
 
-            // Custom "Photo" menu — Cmd+Shift+O opens in Pixelmator Pro.
-            // (Cmd+O is taken by Import above; Cmd+Shift+O is the standard
-            // "Open With…" style modifier.)
+            // Custom "Photo" menu — Library-mode actions (Pixelmator,
+            // Reveal, Select All, Trash). Disabled in Presetter mode
+            // because they don't apply to a single reference image.
             CommandMenu("Photo") {
                 Button("Open in Pixelmator Pro") {
                     store.openSelectionInPixelmator()
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+                .disabled(store.mode != .library || store.photos.isEmpty)
 
                 Button("Reveal in Finder") {
                     store.revealSelectionInFinder()
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
+                .disabled(store.mode != .library || store.photos.isEmpty)
 
                 Divider()
 
@@ -48,11 +60,13 @@ struct RawDeckApp: App {
                     store.selectAll()
                 }
                 .keyboardShortcut("a", modifiers: .command)
+                .disabled(store.mode != .library)
 
                 Button("Clear Selection") {
                     store.deselectAll()
                 }
                 .keyboardShortcut(.escape, modifiers: [])
+                .disabled(store.mode != .library)
 
                 Divider()
 
@@ -60,6 +74,32 @@ struct RawDeckApp: App {
                     _ = store.trashSelection()
                 }
                 .keyboardShortcut(.delete, modifiers: [])
+                .disabled(store.mode != .library)
+            }
+
+            // Presetter-mode menu — export actions. Cmd+E for .xmp,
+            // Cmd+Shift+E for the recreation sheet. Disabled until an
+            // image is loaded and analyzed.
+            CommandMenu("Presetter") {
+                Button("Export Preset (.xmp)…") {
+                    presetter.exportXMP()
+                }
+                .keyboardShortcut("e", modifiers: .command)
+                .disabled(store.mode != .presetter || !presetter.canExport)
+
+                Button("Export Recreation Sheet…") {
+                    presetter.exportRecreationSheet()
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(store.mode != .presetter || !presetter.canExport)
+
+                Divider()
+
+                Button("Clear") {
+                    presetter.reset()
+                }
+                .keyboardShortcut(.delete, modifiers: [])
+                .disabled(store.mode != .presetter || presetter.displayImage == nil)
             }
         }
     }

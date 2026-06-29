@@ -1,18 +1,20 @@
 import SwiftUI
 import AppKit
 
-/// The main window content. Either shows the drop zone (no folder imported)
-/// or the toolbar + grid (folder imported).
+/// The main window content. Switches between Library mode (the original
+/// RawDeck: import, cull, rate, lightbox) and Presetter mode (paste a
+/// reference image, derive a Camera Raw preset, export).
 ///
 /// A small ZStack of hidden keyboard buttons sits on top so the rating
-/// shortcuts (1-5, 0, X) work no-modifier. Cmd+letter shortcuts are
-/// handled in `RawDeckApp` via CommandMenu.
+/// shortcuts (1-5, 0, X) work no-modifier in Library mode. Cmd+letter
+/// shortcuts are handled in `RawDeckApp` via CommandMenu.
 ///
 /// When the lightbox is open, `LightboxView` overlays the entire content
 /// area — the grid remains mounted underneath so its state is preserved
 /// on close (selection, scroll position, etc).
 struct ContentView: View {
     @EnvironmentObject var store: PhotoStore
+    @EnvironmentObject var presetter: PresetterModel
 
     var body: some View {
         // The per-cell `.onHover` already clears `hoveredPhotoID` when the
@@ -27,42 +29,78 @@ struct ContentView: View {
         // "Pixelmator Pro isn't installed"). Manual Binding because
         // `@EnvironmentObject` doesn't expose `$store.alertMessage`
         // directly the way `@State` would.
-        ZStack {
-            // Base layer: drop zone OR grid+toolbar.
-            Group {
-                if store.photos.isEmpty && !store.isLoading {
-                    DropZoneView()
-                } else {
-                    VStack(spacing: 0) {
-                        ToolbarView()
-                        Divider()
-                        FilterBarView()
-                        Divider()
-                        PhotoGridView()
-                        StatusBarView()
-                    }
-                }
-            }
-            .frame(minWidth: 800, minHeight: 600)
+        VStack(spacing: 0) {
+            // Top: mode picker (Library | Presetter)
+            ModeBar()
 
-            // Lightbox overlay — only mounted when open.
-            if store.lightboxPhotoID != nil {
-                LightboxView()
+            Divider()
+
+            // Main content area — switches based on the active mode.
+            // We use ZStack with conditional children so SwiftUI keeps
+            // each mode's view hierarchy mounted when you switch back
+            // (preserves scroll position, text-field focus, etc.).
+            ZStack {
+                libraryContent
+                    .opacity(store.mode == .library ? 1 : 0)
+                    .allowsHitTesting(store.mode == .library)
+
+                PresetterView()
+                    .opacity(store.mode == .presetter ? 1 : 0)
+                    .allowsHitTesting(store.mode == .presetter)
             }
 
-            // Hidden shortcut buttons for no-modifier keys.
-            // Order matters: SwiftUI fires the first match.
-            // - 1-5 / 0: rate the lightbox photo (if open), the single
-            //   selection, or no-op (per Fin B's spec: numbers must
-            //   correlate with stars regardless of mode).
-            // - X: toggle reject on the same target.
-            // - Space: open lightbox on hovered photo (or close if open).
-            // - Left / Right: lightbox navigation.
-            // - Esc: close lightbox (or deselect in grid).
-            // - Delete: NOT bound here — `RawDeckApp.swift` binds it via
-            //   the CommandMenu and `trashSelection()` is already
-            //   lightbox-aware. A second binding would double-fire and
-            //   trash two photos per keypress.
+            Divider()
+
+            // Status bar adapts per mode.
+            StatusBarView()
+        }
+        .frame(minWidth: 800, minHeight: 600)
+        // Library-mode keyboard shortcuts (1-5, 0, X, Space, arrows,
+        // Esc) are only active when in Library mode. Wrapping them
+        // in `if store.mode == .library` prevents them from firing
+        // while the user is in Presetter mode.
+        .overlay(libraryShortcutsOverlay)
+        .alert("RawDeck", isPresented: Binding(
+            get: { store.alertMessage != nil },
+            set: { newValue in if !newValue { store.alertMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(store.alertMessage ?? "")
+        }
+    }
+
+    /// Library-mode content: drop zone OR grid+toolbar.
+    @ViewBuilder
+    private var libraryContent: some View {
+        if store.photos.isEmpty && !store.isLoading {
+            DropZoneView()
+        } else {
+            VStack(spacing: 0) {
+                ToolbarView()
+                Divider()
+                FilterBarView()
+                Divider()
+                PhotoGridView()
+            }
+        }
+
+        // Lightbox overlay — only mounted when open (anywhere in the
+        // main area). When switching to Presetter mode while the
+        // lightbox is open, we keep it mounted but it's covered by
+        // the mode switch — practical, since the user can just go
+        // back to Library mode to see it.
+        if store.lightboxPhotoID != nil {
+            LightboxView()
+        }
+    }
+
+    /// Hidden keyboard buttons for Library-mode no-modifier shortcuts.
+    /// Only mounted when in Library mode (otherwise ⌘1 etc. would
+    /// still try to rate a photo even though the user is in Presetter).
+    @ViewBuilder
+    private var libraryShortcutsOverlay: some View {
+        if store.mode == .library {
             VStack(spacing: 0) {
                 HiddenKeyButton(key: "1", modifiers: []) {
                     store.setRating(1, photo: store.ratingTarget)
@@ -116,47 +154,84 @@ struct ContentView: View {
                 }
             }
         }
-        .alert("RawDeck", isPresented: Binding(
-            get: { store.alertMessage != nil },
-            set: { newValue in if !newValue { store.alertMessage = nil } }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(store.alertMessage ?? "")
-        }
     }
 }
 
 /// Thin status bar at the bottom: shows total photos, selected count,
-/// and the keyboard shortcut hints.
+/// and the keyboard shortcut hints. Adapts to the active mode.
 struct StatusBarView: View {
     @EnvironmentObject var store: PhotoStore
+    @EnvironmentObject var presetter: PresetterModel
 
     var body: some View {
         HStack(spacing: 16) {
-            if store.isLoading {
-                ProgressView()
-                    .controlSize(.small)
-                Text("Importing…")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            } else {
-                Text("\(store.photos.count) photos")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                if !store.selectedIDs.isEmpty {
-                    Text("· \(store.selectedIDs.count) selected")
-                        .font(.caption)
-                        .foregroundColor(.accentColor)
-                }
+            switch store.mode {
+            case .library:
+                libraryStatus
+            case .presetter:
+                presetterStatus
             }
             Spacer()
-            Text("1-5: rate · 0: clear · X: reject · Space: lightbox · ←/→: nav · Esc: close · Delete: trash · ⌘A: all · ⌘O: import · ⌘⇧O: open in Pixelmator · Double-click: open photo")
-                .font(.caption2)
-                .foregroundColor(.secondary)
+            shortcutHint
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
         .background(.bar)
+    }
+
+    @ViewBuilder
+    private var libraryStatus: some View {
+        if store.isLoading {
+            ProgressView()
+                .controlSize(.small)
+            Text("Importing…")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else {
+            Text("\(store.photos.count) photos")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            if !store.selectedIDs.isEmpty {
+                Text("· \(store.selectedIDs.count) selected")
+                    .font(.caption)
+                    .foregroundColor(.accentColor)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var presetterStatus: some View {
+        if presetter.displayImage == nil {
+            Text("Paste or drop a reference image to start.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        } else if let err = presetter.lastError {
+            Text(err)
+                .font(.caption)
+                .foregroundColor(.red)
+        } else if presetter.preset != nil {
+            Text("Preset ready: \(presetter.presetName)")
+                .font(.caption)
+                .foregroundColor(.accentColor)
+        } else {
+            Text("Analyzing…")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
+
+    private var shortcutHint: some View {
+        Group {
+            switch store.mode {
+            case .library:
+                Text("1-5: rate · 0: clear · X: reject · Space: lightbox · ←/→: nav · Esc: close · Delete: trash · ⌘A: all · ⌘O: import · ⌘⇧O: open in Pixelmator · Double-click: open photo")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            case .presetter:
+                Text("⌘O: open · ⌘V: paste · ⌘E: export .xmp · ⌘⇧E: recreation sheet")
+                    .font(.caption2)
+                    .foregroundColor(.secondary)
+            }
+        }
     }
 }
