@@ -194,6 +194,28 @@ final class ColorwayParserModel: ObservableObject {
         }
     }
 
+    /// Load target from raw image data (used when pasting from the
+    /// clipboard — the pasteboard gives us PNG/TIFF/JPEG bytes, not
+    /// a file URL).
+    func loadTarget(from data: Data) {
+        guard let nsImage = NSImage(data: data) else {
+            self.lastError = "Could not decode image data from clipboard (target)."
+            self.targetImage = nil
+            self.targetDisplayImage = nil
+            self.targetStats = nil
+            return
+        }
+        self.targetDisplayImage = nsImage
+        self.targetImage = nsImage
+        if targetName.isEmpty { targetName = "Pasted Target" }
+        // Pasted targets don't have a backing URL, so `targetURL`
+        // stays nil. The "View in Pixelmator" CTA checks for
+        // `targetURL == nil` and surfaces an error in that case.
+        self.lastError = nil
+        analyzeTarget(image: nsImage)
+        recomputeCoachingIfReady()
+    }
+
     func loadTarget(from nsImage: NSImage) {
         self.targetDisplayImage = nsImage
         self.targetImage = nsImage
