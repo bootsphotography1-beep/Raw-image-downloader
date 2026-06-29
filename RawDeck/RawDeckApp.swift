@@ -4,18 +4,18 @@ import AppKit
 @main
 struct RawDeckApp: App {
     @StateObject private var store = PhotoStore()
-    @StateObject private var presetter = PresetterModel()
+    @StateObject private var colorwayParser = ColorwayParserModel()
 
     var body: some Scene {
         Window("RawDeck", id: "main") {
             ContentView()
                 .environmentObject(store)
-                .environmentObject(presetter)
+                .environmentObject(colorwayParser)
         }
         .windowResizability(.contentMinSize)
         .commands {
             // Replace the default "New" with mode-aware imports.
-            // Cmd+O: Library → Import Folder, Presetter → Open Image.
+            // Cmd+O: Library → Import Folder, Colorway Parser → Open Image.
             // Disabled when the action doesn't apply to the current mode.
             CommandGroup(replacing: .newItem) {
                 Button("Import Folder…") {
@@ -32,14 +32,14 @@ struct RawDeckApp: App {
                 .disabled(store.mode != .library)
 
                 Button("Open Image…") {
-                    presetter.openImageViaPanel()
+                    colorwayParser.openImageViaPanel()
                 }
                 .keyboardShortcut("o", modifiers: .command)
-                .disabled(store.mode != .presetter)
+                .disabled(store.mode != .colorwayParser)
             }
 
             // Custom "Photo" menu — Library-mode actions (Pixelmator,
-            // Reveal, Select All, Trash). Disabled in Presetter mode
+            // Reveal, Select All, Trash). Disabled in Colorway Parser mode
             // because they don't apply to a single reference image.
             CommandMenu("Photo") {
                 Button("Open in Pixelmator Pro") {
@@ -77,29 +77,29 @@ struct RawDeckApp: App {
                 .disabled(store.mode != .library)
             }
 
-            // Presetter-mode menu — export actions. Cmd+E for .xmp,
+            // Colorway-mode menu — export actions. Cmd+E for .xmp,
             // Cmd+Shift+E for the recreation sheet. Disabled until an
             // image is loaded and analyzed.
-            CommandMenu("Presetter") {
+            CommandMenu("Colorway") {
                 Button("Export Preset (.xmp)…") {
-                    presetter.exportXMP()
+                    colorwayParser.exportXMP()
                 }
                 .keyboardShortcut("e", modifiers: .command)
-                .disabled(store.mode != .presetter || !presetter.canExport)
+                .disabled(store.mode != .colorwayParser || !colorwayParser.canExport)
 
                 Button("Export Recreation Sheet…") {
-                    presetter.exportRecreationSheet()
+                    colorwayParser.exportRecreationSheet()
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(store.mode != .presetter || !presetter.canExport)
+                .disabled(store.mode != .colorwayParser || !colorwayParser.canExport)
 
                 Divider()
 
                 Button("Clear") {
-                    presetter.reset()
+                    colorwayParser.reset()
                 }
                 .keyboardShortcut(.delete, modifiers: [])
-                .disabled(store.mode != .presetter || presetter.displayImage == nil)
+                .disabled(store.mode != .colorwayParser || colorwayParser.displayImage == nil)
             }
         }
     }

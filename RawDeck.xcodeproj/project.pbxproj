@@ -20,14 +20,14 @@
 		A1000011 /* ExternalAppService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000011 /* ExternalAppService.swift */; };
 		A1000012 /* LightboxView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000012 /* LightboxView.swift */; };
 		A1000013 /* FilterBarView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000013 /* FilterBarView.swift */; };
-		A1000014 /* PresetterModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000014 /* PresetterModel.swift */; };
+		A1000014 /* ColorwayParserModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000014 /* ColorwayParserModel.swift */; };
 		A1000015 /* ImageLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000015 /* ImageLoader.swift */; };
 		A1000016 /* ImageStats.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000016 /* ImageStats.swift */; };
 		A1000017 /* PresetMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000017 /* PresetMapper.swift */; };
 		A1000018 /* XMPWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000018 /* XMPWriter.swift */; };
 		A1000019 /* RecreationSheetWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000019 /* RecreationSheetWriter.swift */; };
 		A1000020 /* ModeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000020 /* ModeBar.swift */; };
-		A1000021 /* PresetterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000021 /* PresetterView.swift */; };
+		A1000021 /* ColorwayParserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000021 /* ColorwayParserView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -44,14 +44,14 @@
 		B1000011 /* ExternalAppService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExternalAppService.swift; sourceTree = "<group>"; };
 		B1000012 /* LightboxView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LightboxView.swift; sourceTree = "<group>"; };
 		B1000013 /* FilterBarView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilterBarView.swift; sourceTree = "<group>"; };
-		B1000014 /* PresetterModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetterModel.swift; sourceTree = "<group>"; };
+		B1000014 /* ColorwayParserModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorwayParserModel.swift; sourceTree = "<group>"; };
 		B1000015 /* ImageLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoader.swift; sourceTree = "<group>"; };
 		B1000016 /* ImageStats.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageStats.swift; sourceTree = "<group>"; };
 		B1000017 /* PresetMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetMapper.swift; sourceTree = "<group>"; };
 		B1000018 /* XMPWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = XMPWriter.swift; sourceTree = "<group>"; };
 		B1000019 /* RecreationSheetWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecreationSheetWriter.swift; sourceTree = "<group>"; };
 		B1000020 /* ModeBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeBar.swift; sourceTree = "<group>"; };
-		B1000021 /* PresetterView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresetterView.swift; sourceTree = "<group>"; };
+		B1000021 /* ColorwayParserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorwayParserView.swift; sourceTree = "<group>"; };
 		B2000001 /* RawDeck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RawDeck.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -82,7 +82,7 @@
 				D1000004 /* Models */,
 				D1000005 /* Views */,
 				D1000006 /* Services */,
-				D1000007 /* Presetter */,
+				D1000007 /* ColorwayParser */,
 			);
 			path = RawDeck;
 			sourceTree = "<group>";
@@ -114,7 +114,7 @@
 				B1000012 /* LightboxView.swift */,
 				B1000013 /* FilterBarView.swift */,
 				B1000020 /* ModeBar.swift */,
-				B1000021 /* PresetterView.swift */,
+				B1000021 /* ColorwayParserView.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -130,17 +130,17 @@
 			sourceTree = "<group>";
 		};
 
-		D1000007 /* Presetter */ = {
+		D1000007 /* ColorwayParser */ = {
 			isa = PBXGroup;
 			children = (
-				B1000014 /* PresetterModel.swift */,
+				B1000014 /* ColorwayParserModel.swift */,
 				B1000015 /* ImageLoader.swift */,
 				B1000016 /* ImageStats.swift */,
 				B1000017 /* PresetMapper.swift */,
 				B1000018 /* XMPWriter.swift */,
 				B1000019 /* RecreationSheetWriter.swift */,
 			);
-			path = Presetter;
+			path = ColorwayParser;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -224,14 +224,14 @@
 				A1000011 /* ExternalAppService.swift in Sources */,
 				A1000012 /* LightboxView.swift in Sources */,
 				A1000013 /* FilterBarView.swift in Sources */,
-				A1000014 /* PresetterModel.swift in Sources */,
+				A1000014 /* ColorwayParserModel.swift in Sources */,
 				A1000015 /* ImageLoader.swift in Sources */,
 				A1000016 /* ImageStats.swift in Sources */,
 				A1000017 /* PresetMapper.swift in Sources */,
 				A1000018 /* XMPWriter.swift in Sources */,
 				A1000019 /* RecreationSheetWriter.swift in Sources */,
 				A1000020 /* ModeBar.swift in Sources */,
-				A1000021 /* PresetterView.swift in Sources */,
+				A1000021 /* ColorwayParserView.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

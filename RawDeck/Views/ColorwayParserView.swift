@@ -2,20 +2,20 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-/// Main view for the Presetter mode. Shows either:
+/// Main view for the Colorway Parser mode. Shows either:
 /// - An empty drop zone (when no image is loaded), prompting the user
 ///   to drop/paste/open an image
 /// - A side-by-side layout: image preview on the left, derived preset
 ///   values on the right, with export buttons below
 ///
-/// The view itself is stateless — all state lives in `PresetterModel`,
+/// The view itself is stateless — all state lives in `ColorwayParserModel`,
 /// which is injected via `@EnvironmentObject`.
-struct PresetterView: View {
-    @EnvironmentObject var presetter: PresetterModel
+struct ColorwayParserView: View {
+    @EnvironmentObject var colorwayParser: ColorwayParserModel
 
     var body: some View {
         Group {
-            if let image = presetter.displayImage {
+            if let image = colorwayParser.displayImage {
                 loadedLayout(image: image)
                 } else {
                 emptyLayout
@@ -39,12 +39,12 @@ struct PresetterView: View {
                 .multilineTextAlignment(.center)
 
             Button("Open Image…") {
-                presetter.openImageViaPanel()
+                colorwayParser.openImageViaPanel()
             }
             .controlSize(.large)
             .keyboardShortcut("o", modifiers: .command)
 
-            if let err = presetter.lastError {
+            if let err = colorwayParser.lastError {
                     Text(err)
                     .font(.caption)
                     .foregroundColor(.red)
@@ -107,12 +107,12 @@ struct PresetterView: View {
         VStack(alignment: .leading, spacing: 0) {
             // Header: name field + Clear button
             HStack {
-                TextField("Preset name", text: $presetter.presetName)
+                TextField("Preset name", text: $colorwayParser.presetName)
                     .textFieldStyle(.roundedBorder)
                     .frame(maxWidth: 240)
                 Spacer()
                 Button("Clear") {
-                    presetter.reset()
+                    colorwayParser.reset()
                 }
                 .controlSize(.small)
             }
@@ -122,7 +122,7 @@ struct PresetterView: View {
 
             // Preset values list
             ScrollView {
-                if let preset = presetter.preset {
+                if let preset = colorwayParser.preset {
                     VStack(alignment: .leading, spacing: 0) {
                     sectionHeader("Basic")
                     presetRow("Exposure", preset.exposure, format: .ev)
@@ -146,7 +146,7 @@ struct PresetterView: View {
                     }
                     .padding(.horizontal, 12)
                     .padding(.vertical, 8)
-                } else if let err = presetter.lastError {
+                } else if let err = colorwayParser.lastError {
                     Text(err)
                     .foregroundColor(.red)
                     .padding(12)
@@ -166,20 +166,20 @@ struct PresetterView: View {
             // Export buttons
             HStack(spacing: 8) {
                 Button {
-                    presetter.exportXMP()
+                    colorwayParser.exportXMP()
                 } label: {
                     Label("Export .xmp", systemImage: "square.and.arrow.up")
                 }
                 .keyboardShortcut("e", modifiers: .command)
-                .disabled(!presetter.canExport)
+                .disabled(!colorwayParser.canExport)
 
                 Button {
-                    presetter.exportRecreationSheet()
+                    colorwayParser.exportRecreationSheet()
                 } label: {
                     Label("Recreation Sheet", systemImage: "doc.text")
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(!presetter.canExport)
+                .disabled(!colorwayParser.canExport)
             }
                     .padding(12)
         }
@@ -265,7 +265,7 @@ struct PresetterView: View {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 if let url = url {
                     Task { @MainActor in
-                    presetter.loadImage(from: url)
+                    colorwayParser.loadImage(from: url)
                     }
                 }
             }
@@ -281,7 +281,7 @@ struct PresetterView: View {
             _ = provider.loadObject(ofClass: NSImage.self) { object, _ in
                 guard let image = object as? NSImage else { return }
                 Task { @MainActor in
-                    presetter.loadImage(from: image)
+                    colorwayParser.loadImage(from: image)
                 }
             }
             return true

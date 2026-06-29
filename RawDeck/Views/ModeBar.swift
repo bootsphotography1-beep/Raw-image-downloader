@@ -3,7 +3,7 @@ import SwiftUI
 /// Segmented mode picker shown at the very top of the RawDeck window.
 ///
 /// Lets the user switch between Library mode (the original RawDeck
-/// feature: import, cull, rate) and Presetter mode (paste a reference
+/// feature: import, cull, rate) and Colorway Parser mode (paste a reference
 /// image, derive a Camera Raw preset, export).
 ///
 /// Implementation notes:
@@ -33,7 +33,7 @@ struct ModeBar: View {
 
             // Right side: contextual info per mode. Currently a no-op
             // placeholder so the bar has visual weight. Could later
-            // show "Library: 247 photos" or "Presetter: <image name>"
+            // show "Library: 247 photos" or "Colorway: <image name>"
             // depending on mode.
             modeStatus
                 .font(.caption)
@@ -53,7 +53,7 @@ struct ModeBar: View {
             } else {
                 Text("\(store.photos.count) photos")
             }
-        case .presetter:
+        case .colorwayParser:
             Text("Drop or paste a reference image")
         }
     }

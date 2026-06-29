@@ -88,7 +88,7 @@ enum ImageLoader {
     /// converted to sRGB at this step because that's what Camera
     /// Raw's slider values are calibrated for.
     ///
-    /// Public so callers (e.g. `PresetterModel`) can pass a CGImage
+    /// Public so callers (e.g. `ColorwayParserModel`) can pass a CGImage
     /// they've obtained from a non-URL source (clipboard paste, etc.).
     static func decode(cgImage: CGImage, maxDimension: Int = 4000) throws -> DecodedImage {
         // Downsample if needed. CGImageSourceCreateThumbnailAtIndex

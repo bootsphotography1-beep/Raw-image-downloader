@@ -32,7 +32,7 @@ final class PhotoStore: ObservableObject {
 
     /// Which top-level mode the app is in. The mode determines what
     /// the main content area shows and which keyboard shortcuts are
-    /// active. Library mode is the default; Presetter mode adds the
+    /// active. Library mode is the default; Colorway Parser mode adds the
     /// preset-extraction feature as a sibling tab.
     @Published var mode: AppMode = .library
 
@@ -597,7 +597,7 @@ enum SortMode: String, CaseIterable, Identifiable {
 /// Currently two modes:
 /// - `.library` — the original RawDeck: import a folder, cull/rate
 ///   photos, lightbox view, send to Pixelmator.
-/// - `.presetter` — paste/drop a reference image, derive a Camera
+/// - `.colorwayParser` — paste/drop a reference image, derive a Camera
 ///   Raw preset, export as .xmp or as a recreation sheet for editors
 ///   that don't read XMP natively (e.g. Pixelmator Pro).
 ///
@@ -606,7 +606,7 @@ enum SortMode: String, CaseIterable, Identifiable {
 /// shortcut bindings in `RawDeckApp`.
 enum AppMode: String, CaseIterable, Identifiable {
     case library
-    case presetter
+    case colorwayParser
 
     var id: String { rawValue }
 
@@ -614,7 +614,7 @@ enum AppMode: String, CaseIterable, Identifiable {
     var label: String {
         switch self {
         case .library:   return "Library"
-        case .presetter: return "Presetter"
+        case .colorwayParser: return "Colorway"
         }
     }
 
@@ -622,7 +622,7 @@ enum AppMode: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .library:   return "rectangle.stack"
-        case .presetter: return "wand.and.stars"
+        case .colorwayParser: return "wand.and.stars"
         }
     }
 }

@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 /// The main window content. Switches between Library mode (the original
-/// RawDeck: import, cull, rate, lightbox) and Presetter mode (paste a
+/// RawDeck: import, cull, rate, lightbox) and Colorway Parser mode (paste a
 /// reference image, derive a Camera Raw preset, export).
 ///
 /// A small ZStack of hidden keyboard buttons sits on top so the rating
@@ -14,7 +14,7 @@ import AppKit
 /// on close (selection, scroll position, etc).
 struct ContentView: View {
     @EnvironmentObject var store: PhotoStore
-    @EnvironmentObject var presetter: PresetterModel
+    @EnvironmentObject var colorwayParser: ColorwayParserModel
 
     var body: some View {
         // The per-cell `.onHover` already clears `hoveredPhotoID` when the
@@ -30,7 +30,7 @@ struct ContentView: View {
         // `@EnvironmentObject` doesn't expose `$store.alertMessage`
         // directly the way `@State` would.
         VStack(spacing: 0) {
-            // Top: mode picker (Library | Presetter)
+            // Top: mode picker (Library | Colorway Parser)
             ModeBar()
 
             Divider()
@@ -44,9 +44,9 @@ struct ContentView: View {
                     .opacity(store.mode == .library ? 1 : 0)
                     .allowsHitTesting(store.mode == .library)
 
-                PresetterView()
-                    .opacity(store.mode == .presetter ? 1 : 0)
-                    .allowsHitTesting(store.mode == .presetter)
+                ColorwayParserView()
+                    .opacity(store.mode == .colorwayParser ? 1 : 0)
+                    .allowsHitTesting(store.mode == .colorwayParser)
             }
 
             Divider()
@@ -58,7 +58,7 @@ struct ContentView: View {
         // Library-mode keyboard shortcuts (1-5, 0, X, Space, arrows,
         // Esc) are only active when in Library mode. Wrapping them
         // in `if store.mode == .library` prevents them from firing
-        // while the user is in Presetter mode.
+        // while the user is in Colorway Parser mode.
         .overlay(libraryShortcutsOverlay)
         .alert("RawDeck", isPresented: Binding(
             get: { store.alertMessage != nil },
@@ -86,7 +86,7 @@ struct ContentView: View {
         }
 
         // Lightbox overlay — only mounted when open (anywhere in the
-        // main area). When switching to Presetter mode while the
+        // main area). When switching to Colorway Parser mode while the
         // lightbox is open, we keep it mounted but it's covered by
         // the mode switch — practical, since the user can just go
         // back to Library mode to see it.
@@ -97,7 +97,7 @@ struct ContentView: View {
 
     /// Hidden keyboard buttons for Library-mode no-modifier shortcuts.
     /// Only mounted when in Library mode (otherwise ⌘1 etc. would
-    /// still try to rate a photo even though the user is in Presetter).
+    /// still try to rate a photo even though the user is in Colorway Parser).
     @ViewBuilder
     private var libraryShortcutsOverlay: some View {
         if store.mode == .library {
@@ -161,15 +161,15 @@ struct ContentView: View {
 /// and the keyboard shortcut hints. Adapts to the active mode.
 struct StatusBarView: View {
     @EnvironmentObject var store: PhotoStore
-    @EnvironmentObject var presetter: PresetterModel
+    @EnvironmentObject var colorwayParser: ColorwayParserModel
 
     var body: some View {
         HStack(spacing: 16) {
             switch store.mode {
             case .library:
                 libraryStatus
-            case .presetter:
-                presetterStatus
+            case .colorwayParser:
+                colorwayParserStatus
             }
             Spacer()
             shortcutHint
@@ -200,17 +200,17 @@ struct StatusBarView: View {
     }
 
     @ViewBuilder
-    private var presetterStatus: some View {
-        if presetter.displayImage == nil {
+    private var colorwayParserStatus: some View {
+        if colorwayParser.displayImage == nil {
             Text("Paste or drop a reference image to start.")
                 .font(.caption)
                 .foregroundColor(.secondary)
-        } else if let err = presetter.lastError {
+        } else if let err = colorwayParser.lastError {
             Text(err)
                 .font(.caption)
                 .foregroundColor(.red)
-        } else if presetter.preset != nil {
-            Text("Preset ready: \(presetter.presetName)")
+        } else if colorwayParser.preset != nil {
+            Text("Preset ready: \(colorwayParser.presetName)")
                 .font(.caption)
                 .foregroundColor(.accentColor)
         } else {
@@ -227,7 +227,7 @@ struct StatusBarView: View {
                 Text("1-5: rate · 0: clear · X: reject · Space: lightbox · ←/→: nav · Esc: close · Delete: trash · ⌘A: all · ⌘O: import · ⌘⇧O: open in Pixelmator · Double-click: open photo")
                     .font(.caption2)
                     .foregroundColor(.secondary)
-            case .presetter:
+            case .colorwayParser:
                 Text("⌘O: open · ⌘V: paste · ⌘E: export .xmp · ⌘⇧E: recreation sheet")
                     .font(.caption2)
                     .foregroundColor(.secondary)

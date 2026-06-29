@@ -2,11 +2,11 @@ import Foundation
 import AppKit
 import UniformTypeIdentifiers
 
-/// State and actions for the Presetter feature: load a reference image
+/// State and actions for the Colorway Parser feature: load a reference image
 /// (drag-drop, paste, or open panel), run the analyzer, and export the
 /// derived preset.
 ///
-/// `PresetterModel` is intentionally separate from `PhotoStore` — the
+/// `ColorwayParserModel` is intentionally separate from `PhotoStore` — the
 /// library feature (culling, rating, lightbox) and the preset-extraction
 /// feature have almost nothing in common. Putting them in the same
 /// ObservableObject would force a unified lifecycle that's awkward for
@@ -17,7 +17,7 @@ import UniformTypeIdentifiers
 /// The model is `@MainActor` because it touches `NSImage` and writes to
 /// the clipboard, both of which are main-actor-safe.
 @MainActor
-final class PresetterModel: ObservableObject {
+final class ColorwayParserModel: ObservableObject {
 
     /// The loaded reference image, as displayed in the UI. `nil` means
     /// "no image yet — show the drop zone."
@@ -113,7 +113,7 @@ final class PresetterModel: ObservableObject {
     private func loadNSImage(from url: URL) throws -> NSImage {
         guard let img = NSImage(contentsOf: url) else {
             throw NSError(
-                domain: "Presetter",
+                domain: "Colorway",
                 code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Unsupported image format or unreadable file."]
             )
@@ -155,7 +155,7 @@ final class PresetterModel: ObservableObject {
     // MARK: - Paste
 
     /// Read an image from the system clipboard (NSPasteboard). Called
-    /// when the user hits ⌘V while the Presetter tab is active.
+    /// when the user hits ⌘V while the Colorway Parser tab is active.
     func pasteFromClipboard() {
         let pb = NSPasteboard.general
 
