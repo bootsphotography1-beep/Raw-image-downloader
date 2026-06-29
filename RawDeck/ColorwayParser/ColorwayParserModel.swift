@@ -2,224 +2,393 @@ import Foundation
 import AppKit
 import UniformTypeIdentifiers
 
-/// State and actions for the Colorway Parser feature: load a reference image
-/// (drag-drop, paste, or open panel), run the analyzer, and export the
-/// derived preset.
+/// State and actions for the Colorway Parser feature.
 ///
-/// `ColorwayParserModel` is intentionally separate from `PhotoStore` — the
-/// library feature (culling, rating, lightbox) and the preset-extraction
-/// feature have almost nothing in common. Putting them in the same
-/// ObservableObject would force a unified lifecycle that's awkward for
-/// both (e.g. opening a new reference image shouldn't clear the user's
-/// rated library; importing a folder shouldn't disturb a half-finished
-/// preset extraction).
+/// Two usage modes:
+///   1. **Coaching** (default, two-image): user drops a *reference*
+///      image whose look they want to mimic, then drops a *target*
+///      RAW they want to apply the look to. Model computes a per-
+///      parameter delta + confidence and exposes them as
+///      `coachingDeltaRows`.
+///   2. **Quick preset** (legacy single-image): only reference loaded.
+///      Model exposes the inferred `preset` for export as .xmp or
+///      recreation sheet. No delta, no confidence.
 ///
-/// The model is `@MainActor` because it touches `NSImage` and writes to
-/// the clipboard, both of which are main-actor-safe.
+/// `ColorwayParserModel` is intentionally separate from `PhotoStore`:
+/// the library feature (cull, rate, lightbox) and the preset-
+/// extraction feature have almost nothing in common. Putting them in
+/// the same ObservableObject would force a unified lifecycle that's
+/// awkward for both.
+///
+/// The model is `@MainActor` because it touches `NSImage` and writes
+/// to the clipboard, both of which are main-actor-safe.
 @MainActor
 final class ColorwayParserModel: ObservableObject {
 
-    /// The loaded reference image, as displayed in the UI. `nil` means
-    /// "no image yet — show the drop zone."
+    // MARK: - Mode
+
+    /// Which flow the user is in. Default is `.coaching` per the
+    /// 2026-06-29 spec. Toggled by the dropdown in the header.
+    enum Mode: String, CaseIterable, Identifiable {
+        case coaching
+        case quickPreset
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .coaching:    return "Coaching"
+            case .quickPreset: return "Quick preset"
+            }
+        }
+    }
+
+    @Published var mode: Mode = .coaching
+
+    // MARK: - Reference (the look to mimic)
+
     @Published private(set) var image: NSImage? = nil
-
-    /// The image as an NSImage that we can pass to the analyzer.
-    /// Cached separately from `image` because the analyzer wants a
-    /// pixel buffer and the UI wants the SwiftUI `Image` rendering.
-    /// In practice we always set them together.
     @Published private(set) var displayImage: NSImage? = nil
+    @Published private(set) var referenceName: String = ""
+    @Published private(set) var referenceStats: ImageStats? = nil
 
-    /// The derived preset values. `nil` until the analyzer has run on
-    /// the current image.
+    // MARK: - Target (your RAW, only used in coaching mode)
+
+    @Published private(set) var targetImage: NSImage? = nil
+    @Published private(set) var targetDisplayImage: NSImage? = nil
+    @Published private(set) var targetName: String = ""
+    @Published private(set) var targetStats: ImageStats? = nil
+    @Published private(set) var targetURL: URL? = nil  // for "View in Pixelmator"
+
+    // MARK: - Output
+
+    /// Single-image preset (Quick preset mode only — the inferred
+    /// look the user wants to capture). Coaching mode uses
+    /// `coachingDeltaRows` instead, which is the *delta* between
+    /// target and reference.
     @Published private(set) var preset: DerivedPreset? = nil
 
     /// Optional name the user has given this preset. Used as the XMP
     /// preset's `crs:Name` field and as the file stem on export.
     @Published var presetName: String = ""
 
-    /// Last error message (e.g. "unsupported image format"). Cleared
-    /// on successful load.
+    /// Per-parameter delta rows for coaching mode. Each row knows its
+    /// value (signed delta to apply) and confidence (high/medium/low).
+    /// `nil` until both reference and target have loaded and analyzed.
+    @Published private(set) var coachingDeltaRows: [CoachingDeltaRow] = []
+
+    /// Summary counts for the header chip in coaching mode.
+    /// `nil` until delta is computed.
+    var confidenceSummary: (high: Int, medium: Int, low: Int)? {
+        guard !coachingDeltaRows.isEmpty else { return nil }
+        var h = 0, m = 0, l = 0
+        for row in coachingDeltaRows {
+            switch row.confidence {
+            case .high:   h += 1
+            case .medium: m += 1
+            case .low:    l += 1
+            }
+        }
+        return (h, m, l)
+    }
+
+    /// Last error message. Cleared on successful load.
     @Published private(set) var lastError: String? = nil
 
-    /// Whether the export buttons should be enabled. They require both
-    /// a loaded image AND a derived preset.
-    var canExport: Bool { image != nil && preset != nil }
+    /// Whether the export buttons should be enabled.
+    /// - In coaching mode: requires both images + delta rows.
+    /// - In quick preset mode: requires the reference + preset.
+    var canExport: Bool {
+        switch mode {
+        case .coaching:
+            return image != nil && targetImage != nil && !coachingDeltaRows.isEmpty
+        case .quickPreset:
+            return image != nil && preset != nil
+        }
+    }
 
-    // MARK: - Loading
+    // MARK: - Loading — Reference
 
-    /// Open an image via the standard macOS file picker.
-    func openImageViaPanel() {
+    func openReferenceViaPanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.image]
-        panel.prompt = "Load"
+        panel.prompt = "Load Reference"
         if panel.runModal() == .OK, let url = panel.url {
-            loadImage(from: url)
+            loadReference(from: url)
         }
     }
 
-    /// Load an image from a URL (called from the file picker or a
-    /// drag-and-drop operation). Triggers analysis on success.
-    func loadImage(from url: URL) {
+    func loadReference(from url: URL) {
         do {
             let nsImage = try loadNSImage(from: url)
             self.displayImage = nsImage
             self.image = nsImage
-            self.presetName = url.deletingPathExtension().lastPathComponent
+            self.referenceName = url.deletingPathExtension().lastPathComponent
             self.lastError = nil
-            analyze(image: nsImage)
+            if presetName.isEmpty { presetName = referenceName }
+            analyzeReference(image: nsImage)
+            recomputeCoachingIfReady()
         } catch {
-            self.lastError = "Could not load image: \(error.localizedDescription)"
+            self.lastError = "Could not load reference: \(error.localizedDescription)"
             self.image = nil
             self.displayImage = nil
-            self.preset = nil
+            self.referenceStats = nil
         }
     }
 
-    /// Load an image from raw PNG/JPEG/etc. data (used by paste).
-    func loadImage(from data: Data) {
+    func loadReference(from data: Data) {
         guard let nsImage = NSImage(data: data) else {
             self.lastError = "Could not decode image data from clipboard."
-            self.image = nil
-            self.displayImage = nil
-            self.preset = nil
             return
         }
         self.displayImage = nsImage
         self.image = nsImage
-        self.presetName = "Pasted Image"
+        if referenceName.isEmpty { referenceName = "Pasted Reference" }
+        if presetName.isEmpty { presetName = referenceName }
         self.lastError = nil
-        analyze(image: nsImage)
+        analyzeReference(image: nsImage)
+        recomputeCoachingIfReady()
     }
 
-    /// Load an image from an already-decoded NSImage. Used by drag-
-    /// and-drop from apps that provide images as NSItemProvider objects
-    /// (Photos, Safari, etc.).
-    func loadImage(from nsImage: NSImage) {
+    func loadReference(from nsImage: NSImage) {
         self.displayImage = nsImage
         self.image = nsImage
-        if self.presetName.isEmpty {
-            self.presetName = "Pasted Image"
-        }
+        if referenceName.isEmpty { referenceName = "Pasted Reference" }
+        if presetName.isEmpty { presetName = referenceName }
         self.lastError = nil
-        analyze(image: nsImage)
+        analyzeReference(image: nsImage)
+        recomputeCoachingIfReady()
     }
 
-    /// Read a file URL into an NSImage. Uses NSImage(contentsOf:),
-    /// which handles JPEG/PNG/HEIC/TIFF and reads embedded preview
-    /// metadata when present.
+    // MARK: - Loading — Target
+
+    func openTargetViaPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]  // [.rawImage] if we want strict RAW
+        panel.prompt = "Load Your RAW"
+        if panel.runModal() == .OK, let url = panel.url {
+            loadTarget(from: url)
+        }
+    }
+
+    func loadTarget(from url: URL) {
+        do {
+            let nsImage = try loadNSImage(from: url)
+            self.targetDisplayImage = nsImage
+            self.targetImage = nsImage
+            self.targetName = url.deletingPathExtension().lastPathComponent
+            self.targetURL = url
+            self.lastError = nil
+            analyzeTarget(image: nsImage)
+            recomputeCoachingIfReady()
+        } catch {
+            self.lastError = "Could not load target: \(error.localizedDescription)"
+            self.targetImage = nil
+            self.targetDisplayImage = nil
+            self.targetStats = nil
+            self.targetURL = nil
+        }
+    }
+
+    func loadTarget(from nsImage: NSImage) {
+        self.targetDisplayImage = nsImage
+        self.targetImage = nsImage
+        if targetName.isEmpty { targetName = "Pasted Target" }
+        self.lastError = nil
+        analyzeTarget(image: nsImage)
+        recomputeCoachingIfReady()
+    }
+
+    // MARK: - Loading — generic (kept for back-compat with old call sites)
+
+    /// Back-compat alias. Old code calls `loadImage(from:)` expecting
+    /// it to load the reference. Routes to `loadReference(from:)`.
+    func loadImage(from url: URL) { loadReference(from: url) }
+    func loadImage(from data: Data) { loadReference(from: data) }
+    func loadImage(from nsImage: NSImage) { loadReference(from: nsImage) }
+
+    /// Back-compat alias. Old single-image `openImageViaPanel`.
+    func openImageViaPanel() { openReferenceViaPanel() }
+
+    // MARK: - Analysis
+
+    private func analyzeReference(image: NSImage) {
+        guard let cg = cgImage(from: image) else {
+            self.lastError = "Could not access pixel data for reference."
+            self.referenceStats = nil
+            self.preset = nil
+            return
+        }
+        do {
+            let decoded = try ImageLoader.decode(cgImage: cg, maxDimension: 4000)
+            let stats = ImageStatsComputer.compute(from: decoded)
+            self.referenceStats = stats
+            // Update quick-preset preset too (it's the same math).
+            self.preset = PresetMapper.derive(from: stats)
+        } catch {
+            self.lastError = "Reference analysis failed: \(error.localizedDescription)"
+            self.referenceStats = nil
+            self.preset = nil
+        }
+    }
+
+    private func analyzeTarget(image: NSImage) {
+        guard let cg = cgImage(from: image) else {
+            self.lastError = "Could not access pixel data for target."
+            self.targetStats = nil
+            return
+        }
+        do {
+            let decoded = try ImageLoader.decode(cgImage: cg, maxDimension: 4000)
+            let stats = ImageStatsComputer.compute(from: decoded)
+            self.targetStats = stats
+        } catch {
+            self.lastError = "Target analysis failed: \(error.localizedDescription)"
+            self.targetStats = nil
+        }
+    }
+
+    /// Decode an NSImage into a CGImage via the TIFF round-trip.
+    /// NSImage's `cgImage(forProposedRect:)` is documented but quirky
+    /// for vector PDFs and some RAW previews; the TIFF round-trip is
+    /// slower but always correct.
+    private func cgImage(from image: NSImage) -> CGImage? {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else {
+            return nil
+        }
+        return bitmap.cgImage
+    }
+
+    /// Compute the coaching delta rows from the two stats.
+    /// No-op until both `referenceStats` and `targetStats` exist.
+    private func recomputeCoachingIfReady() {
+        guard let ref = referenceStats, let tgt = targetStats else {
+            self.coachingDeltaRows = []
+            return
+        }
+        // Derive a preset from each, then compute the delta to apply
+        // to the target to bring it toward the reference look.
+        let refPreset = PresetMapper.derive(from: ref)
+        let tgtPreset = PresetMapper.derive(from: tgt)
+
+        self.coachingDeltaRows = CoachingDeltaComputer.compute(
+            reference: refPreset,
+            target: tgtPreset,
+            referenceStats: ref,
+            targetStats: tgt
+        )
+    }
+
+    // MARK: - File I/O
+
     private func loadNSImage(from url: URL) throws -> NSImage {
         guard let img = NSImage(contentsOf: url) else {
             throw NSError(
-                domain: "Colorway",
-                code: 1,
+                domain: "Colorway", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Unsupported image format or unreadable file."]
             )
         }
         return img
     }
 
-    // MARK: - Analysis
-
-    /// Run the analyzer on the current image and update `preset`.
-    /// Done synchronously on the main actor because the input is
-    /// already downsampled (the analyzer caps at 4000px) and the
-    /// work is a few hundred ms at most.
-    private func analyze(image: NSImage) {
-        // The analyzer wants a CGImage-backed bitmap. NSImage can be
-        // backed by various representations; we ask it for a TIFF and
-        // re-decode via ImageIO to get a reliable CGImage. (NSImage's
-        // `cgImage(forProposedRect:)` is documented but quirky for
-        // vector PDFs and some RAW previews; the TIFF round-trip is
-        // slower but always correct.)
-        guard let tiff = image.tiffRepresentation,
-              let bitmap = NSBitmapImageRep(data: tiff),
-              let cg = bitmap.cgImage else {
-            self.lastError = "Could not access pixel data for analysis."
-            self.preset = nil
-            return
-        }
-
-        do {
-            let decoded = try ImageLoader.decode(cgImage: cg, maxDimension: 4000)
-            let stats = ImageStatsComputer.compute(from: decoded)
-            self.preset = PresetMapper.derive(from: stats)
-        } catch {
-            self.lastError = "Analysis failed: \(error.localizedDescription)"
-            self.preset = nil
-        }
-    }
-
     // MARK: - Paste
 
-    /// Read an image from the system clipboard (NSPasteboard). Called
-    /// when the user hits ⌘V while the Colorway Parser tab is active.
-    func pasteFromClipboard() {
-        let pb = NSPasteboard.general
+    /// Paste the first image on the clipboard into the **reference**
+    /// slot. ⌘V behaviour while no image is loaded or the reference
+    /// pane has focus.
+    func pasteFromClipboard() { pasteFromClipboard(asTarget: false) }
 
-        // Try file URLs first (drag-from-Finder paste).
+    /// Paste into the **target** slot. Used when the target pane has
+    /// focus (⌘⇧V).
+    func pasteTargetFromClipboard() { pasteFromClipboard(asTarget: true) }
+
+    private func pasteFromClipboard(asTarget: Bool) {
+        let pb = NSPasteboard.general
         if let urls = pb.readObjects(forClasses: [NSURL.self], options: nil) as? [URL],
            let url = urls.first {
-            loadImage(from: url)
+            if asTarget { loadTarget(from: url) } else { loadReference(from: url) }
             return
         }
-
-        // Then try raw image data (screenshot, copy-from-Photos, etc.).
         if let data = pb.data(forType: .png)
             ?? pb.data(forType: .tiff)
             ?? pb.data(forType: NSPasteboard.PasteboardType("public.jpeg")) {
-            loadImage(from: data)
+            if asTarget { loadTarget(from: data) } else { loadReference(from: data) }
             return
         }
-
         self.lastError = "Clipboard doesn't contain an image."
     }
 
     // MARK: - Reset
 
-    /// Clear the current image and preset. Used by the "Clear" button
-    /// and when the user wants to start over with a new reference.
+    /// Clear both reference and target. Used by the "Clear" button.
     func reset() {
         self.image = nil
         self.displayImage = nil
+        self.referenceName = ""
+        self.referenceStats = nil
+        self.targetImage = nil
+        self.targetDisplayImage = nil
+        self.targetName = ""
+        self.targetStats = nil
+        self.targetURL = nil
         self.preset = nil
+        self.coachingDeltaRows = []
         self.presetName = ""
         self.lastError = nil
     }
 
     // MARK: - Export
 
-    /// Export the derived preset as an .xmp file (Photoshop Camera Raw /
-    /// Lightroom Classic). Prompts the user for a save location.
+    /// Export the derived preset as an .xmp file (Camera Raw / Lightroom).
+    /// In coaching mode, exports the *delta* applied to the target. In
+    /// quick preset mode, exports the absolute preset for the reference.
     func exportXMP() {
-        guard let preset = preset else { return }
+        let xmpString: String
+        switch mode {
+        case .coaching:
+            guard !coachingDeltaRows.isEmpty else { return }
+            xmpString = XMPWriter.makeCoaching(name: presetName, rows: coachingDeltaRows)
+        case .quickPreset:
+            guard let p = preset else { return }
+            xmpString = XMPWriter.make(name: presetName, preset: p)
+        }
+
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "xmp") ?? .xml]
         panel.nameFieldStringValue = "\(safeFileName(presetName))-look.xmp"
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
-            let xmp = XMPWriter.make(name: presetName, preset: preset)
             do {
-                try xmp.write(to: url, atomically: true, encoding: .utf8)
+                try xmpString.write(to: url, atomically: true, encoding: .utf8)
             } catch {
                 self.lastError = "Failed to write XMP: \(error.localizedDescription)"
             }
         }
     }
 
-    /// Export a "recreation sheet" — a Markdown file with each slider
-    /// value, for editors that don't read XMP (e.g. Pixelmator Pro).
-    /// The user opens this next to their editor and dials the values in.
+    /// Export a "recreation sheet" — a Markdown file with each value
+    /// for editors that don't read XMP (e.g. Pixelmator Pro).
     func exportRecreationSheet() {
-        guard let preset = preset else { return }
+        let sheet: String
+        switch mode {
+        case .coaching:
+            guard !coachingDeltaRows.isEmpty else { return }
+            sheet = RecreationSheetWriter.makeCoaching(name: presetName, rows: coachingDeltaRows)
+        case .quickPreset:
+            guard let p = preset else { return }
+            sheet = RecreationSheetWriter.make(name: presetName, preset: p)
+        }
+
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "md") ?? .plainText]
         panel.nameFieldStringValue = "\(safeFileName(presetName))-recreation.md"
         panel.canCreateDirectories = true
         if panel.runModal() == .OK, let url = panel.url {
-            let sheet = RecreationSheetWriter.make(name: presetName, preset: preset)
             do {
                 try sheet.write(to: url, atomically: true, encoding: .utf8)
             } catch {
@@ -228,8 +397,36 @@ final class ColorwayParserModel: ObservableObject {
         }
     }
 
-    /// Strip characters that are awkward in filenames. Conservative —
-    /// we don't try to handle every edge case, just the obvious ones.
+    /// In coaching mode, write the XMP *next to the target file* (so
+    /// editors that auto-pickup sidecars will find it) and open the
+    /// target in Pixelmator Pro. In quick preset mode, there's no
+    /// target to open — fall back to a save panel.
+    func viewInPixelmator() {
+        switch mode {
+        case .coaching:
+            guard let targetURL = targetURL else {
+                self.lastError = "No target file to open in Pixelmator."
+                return
+            }
+            // Write the XMP sidecar next to the target.
+            let xmpURL = targetURL.deletingPathExtension()
+                .appendingPathExtension("xmp")
+            let xmpString = XMPWriter.makeCoaching(name: presetName, rows: coachingDeltaRows)
+            do {
+                try xmpString.write(to: xmpURL, atomically: true, encoding: .utf8)
+            } catch {
+                self.lastError = "Failed to write XMP sidecar: \(error.localizedDescription)"
+                return
+            }
+            ExternalAppService.openInPixelmator(targetURL)
+
+        case .quickPreset:
+            // No target file in this mode. Save the XMP and tell the user.
+            exportXMP()
+        }
+    }
+
+    /// Strip characters that are awkward in filenames.
     private func safeFileName(_ s: String) -> String {
         let invalid = CharacterSet(charactersIn: "/\\:*?\"<>|")
         return s.components(separatedBy: invalid).joined(separator: "_")

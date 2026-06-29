@@ -67,6 +67,86 @@ enum XMPWriter {
         """
     }
 
+    /// Build an XMP document from coaching delta rows (the *target*
+    /// adjustments the user wants to apply to their RAW to mimic the
+    /// reference). Used in coaching mode.
+    ///
+    /// Output is identical in shape to `make(name:preset:)` — Camera
+    /// Raw treats them as the same artifact. The values inside are
+    /// the per-parameter deltas instead of absolute slider values.
+    static func makeCoaching(name: String, rows: [CoachingDeltaRow]) -> String {
+        // Default missing parameters to 0 — keeps the XMP well-formed
+        // even if the caller omitted some.
+        var exposure: Double = 0
+        var contrast: Double = 0
+        var highlights: Double = 0
+        var shadows: Double = 0
+        var whites: Double = 0
+        var blacks: Double = 0
+        var vibrance: Double = 0
+        var saturation: Double = 0
+        var temperature: Double = 0
+        var tint: Double = 0
+
+        for row in rows {
+            switch row.parameter {
+            case .exposure:    exposure = row.value
+            case .contrast:    contrast = row.value
+            case .highlights:  highlights = row.value
+            case .shadows:     shadows = row.value
+            case .whites:      whites = row.value
+            case .blacks:      blacks = row.value
+            case .vibrance:    vibrance = row.value
+            case .saturation:  saturation = row.value
+            case .temperature: temperature = row.value
+            case .tint:        tint = row.value
+            }
+        }
+
+        return """
+        <?xpacket begin="﻿" id="W5M0MpCehiHzreSzNTczkc9d"?>
+        <x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="RawDeck Coaching 1.0">
+          <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+            <rdf:Description rdf:about=""
+                xmlns:crs="http://ns.adobe.com/camera-raw-settings/1.0/"
+                crs:PresetType="Normal"
+                crs:Cluster=""
+                crs:UUID="\(uuidString())"
+                crs:SupportsAmount="False"
+                crs:Name="\(xmlEscape(name)) (Coaching Delta)"
+                crs:ProcessVersion="11.0"
+                crs:Exposure2012="\(exposure)"
+                crs:Contrast2012="\(contrast)"
+                crs:Highlights2012="\(highlights)"
+                crs:Shadows2012="\(shadows)"
+                crs:Whites2012="\(whites)"
+                crs:Blacks2012="\(blacks)"
+                crs:Texture="0"
+                crs:Clarity2012="0"
+                crs:Dehaze="0"
+                crs:Vibrance="\(vibrance)"
+                crs:Saturation="\(saturation)"
+                crs:Temperature="\(temperature)"
+                crs:Tint="\(tint)"
+                crs:Sharpness="25"
+                crs:SharpenRadius="+1.0"
+                crs:SharpenDetail="25"
+                crs:SharpenEdgeMasking="0"
+                crs:LuminanceSmoothing="0"
+                crs:LuminanceNoiseReductionDetail="50"
+                crs:LuminanceNoiseReductionContrast="0"
+                crs:ColorNoiseReduction="25"
+                crs:ColorNoiseReductionDetail="50"
+                crs:ColorNoiseReductionSmoothness="50"
+                crs:ToneCurveName2012="Linear"
+                crs:HasCrop="False"
+                crs:AlreadyApplied="False" />
+          </rdf:RDF>
+        </x:xmpmeta>
+        <?xpacket end="w"?>
+        """
+    }
+
     /// Generate a stable UUID-like string. Camera Raw uses UUIDs to
     /// distinguish presets with the same name. We use a real UUID
     /// for simplicity.

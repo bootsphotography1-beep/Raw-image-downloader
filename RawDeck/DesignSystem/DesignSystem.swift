@@ -315,6 +315,160 @@ public struct RDNumberReadout: View {
     }
 }
 
+// MARK: - Nav rail (left-edge icon stack)
+
+/// Left-edge vertical icon rail. Replaces the top "tabs" pattern
+/// with a Lightroom / Capture One style sidebar.
+///
+/// Each item is a 44×44pt hit target with a 24pt SF Symbol glyph.
+/// Active state: accent-colored glyph + 2pt left-edge accent bar.
+/// Inactive: secondary-text glyph. Hover: primary-text glyph on a
+/// surfaceElevated pill.
+///
+/// Caller provides the binding to the active mode and a list of
+/// (id, label, systemImage) items. The rail is intentionally dumb —
+/// it doesn't know about Library vs Colorway; that's the caller's
+/// job to interpret the selected id.
+public struct RDNavItem: Identifiable, Hashable {
+    public let id: String
+    public let label: String
+    public let systemImage: String
+    public init(id: String, label: String, systemImage: String) {
+        self.id = id
+        self.label = label
+        self.systemImage = systemImage
+    }
+}
+
+public struct RDNavRail: View {
+    @Binding var selection: String
+    let items: [RDNavItem]
+
+    public init(selection: Binding<String>, items: [RDNavItem]) {
+        self._selection = selection
+        self.items = items
+    }
+
+    public var body: some View {
+        VStack(spacing: RDSpace.xs) {
+            ForEach(items) { item in
+                navButton(for: item)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, RDSpace.s)
+        .frame(width: 56)
+        .background(RDColor.surfaceRaised)
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(RDColor.hairline)
+                .frame(width: 0.5)
+        }
+    }
+
+    @ViewBuilder
+    private func navButton(for item: RDNavItem) -> some View {
+        let isActive = selection == item.id
+        Button {
+            selection = item.id
+        } label: {
+            VStack(spacing: 2) {
+                ZStack(alignment: .leading) {
+                    // Hover/active pill background.
+                    if isActive {
+                        Capsule()
+                            .fill(RDColor.accentPrimaryDim)
+                            .frame(width: 40, height: 36)
+                    } else {
+                        // Hover background comes from `.onHover` via
+                        // a state — we keep it simple by NOT adding
+                        // hover state and just letting the icon color
+                        // change. Pro apps usually do this; the pill
+                        // background is reserved for the active state.
+                        EmptyView()
+                    }
+                    // 2pt left-edge accent bar (active only).
+                    if isActive {
+                        Capsule()
+                            .fill(RDColor.accentPrimary)
+                            .frame(width: 2, height: 18)
+                            .offset(x: -25)
+                    }
+                    Image(systemName: item.systemImage)
+                        .font(.system(size: 20, weight: isActive ? .semibold : .regular))
+                        .foregroundStyle(isActive
+                                         ? RDColor.accentPrimary
+                                         : RDColor.textSecondary)
+                }
+                .frame(width: 44, height: 36)
+
+                Text(item.label)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(isActive
+                                     ? RDColor.textPrimary
+                                     : RDColor.textSecondary)
+            }
+            .frame(width: 56)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(item.label)
+        .accessibilityLabel(item.label)
+        .accessibilityAddTraits(isActive ? .isSelected : [])
+    }
+}
+
+// MARK: - Confidence dot
+
+/// Three-state confidence indicator used in Colorway coaching rows.
+///
+///   ● high   — solid circle, RDColor.positive
+///   ◐ medium — half-filled circle, RDColor.warning
+///   ○ low    — ring outline, RDColor.textTertiary
+///
+/// 8pt default. Sized to read at the right edge of a coaching delta
+/// row, next to the value. Not interactive on its own — the parent
+/// row provides any popover that explains *why*.
+public enum RDConfidence: String, CaseIterable, Hashable {
+    case high
+    case medium
+    case low
+}
+
+public struct RDConfidenceDot: View {
+    var level: RDConfidence
+    var size: CGFloat = 8
+
+    public init(_ level: RDConfidence, size: CGFloat = 8) {
+        self.level = level
+        self.size = size
+    }
+
+    @ViewBuilder
+    public var body: some View {
+        switch level {
+        case .high:
+            Circle()
+                .fill(RDColor.positive)
+                .frame(width: size, height: size)
+                .help("High confidence")
+        case .medium:
+            // SF Symbol half-filled circle. We tint via .foregroundStyle.
+            Image(systemName: "circle.lefthalf.filled")
+                .resizable()
+                .scaledToFit()
+                .frame(width: size, height: size)
+                .foregroundStyle(RDColor.warning)
+                .help("Medium confidence")
+        case .low:
+            Circle()
+                .strokeBorder(RDColor.textTertiary, lineWidth: 1)
+                .frame(width: size, height: size)
+                .help("Low confidence")
+        }
+    }
+}
+
 // MARK: - Pixelmator-sent badge
 
 /// Small overlay glyph for thumbnails that have been opened in

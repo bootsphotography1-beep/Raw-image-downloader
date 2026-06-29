@@ -16,43 +16,52 @@ struct ContentView: View {
     @EnvironmentObject var store: PhotoStore
     @EnvironmentObject var colorwayParser: ColorwayParserModel
 
-    var body: some View {
-        // The per-cell `.onHover` already clears `hoveredPhotoID` when the
-        // cursor leaves the cell. When the cursor moves directly between
-        // two cells, the outgoing cell's `onHover(false)` and the incoming
-        // cell's `onHover(true)` fire in sequence; the guard
-        // `store.hoveredPhotoID == photo.id` in `ThumbnailCell` prevents
-        // the outgoing cell from clearing the value the incoming cell just
-        // set.
+    /// Items shown in the left-edge nav rail. `id` matches `AppMode`'s
+    /// raw value so we can bind directly.
+    private let navItems: [RDNavItem] = [
+        RDNavItem(id: "library", label: "Library", systemImage: "photo.on.rectangle"),
+        RDNavItem(id: "colorwayParser", label: "Colorway", systemImage: "wand.and.stars"),
+    ]
 
+    var body: some View {
         // One-shot alert — surfaced when store sets `alertMessage` (e.g.
         // "Pixelmator Pro isn't installed"). Manual Binding because
         // `@EnvironmentObject` doesn't expose `$store.alertMessage`
         // directly the way `@State` would.
-        VStack(spacing: 0) {
-            // Top: mode picker (Library | Colorway Parser)
-            ModeBar()
+        HStack(spacing: 0) {
+            // Left-edge nav rail (replaces the old top ModeBar).
+            RDNavRail(
+                selection: Binding(
+                    get: { store.mode.rawValue },
+                    set: { newValue in
+                        if let mode = AppMode(rawValue: newValue) {
+                            store.mode = mode
+                        }
+                    }
+                ),
+                items: navItems
+            )
 
-            Divider()
+            VStack(spacing: 0) {
+                // Main content area — switches based on the active mode.
+                // We use ZStack with conditional children so SwiftUI keeps
+                // each mode's view hierarchy mounted when you switch back
+                // (preserves scroll position, text-field focus, etc.).
+                ZStack {
+                    libraryContent
+                        .opacity(store.mode == .library ? 1 : 0)
+                        .allowsHitTesting(store.mode == .library)
 
-            // Main content area — switches based on the active mode.
-            // We use ZStack with conditional children so SwiftUI keeps
-            // each mode's view hierarchy mounted when you switch back
-            // (preserves scroll position, text-field focus, etc.).
-            ZStack {
-                libraryContent
-                    .opacity(store.mode == .library ? 1 : 0)
-                    .allowsHitTesting(store.mode == .library)
+                    ColorwayParserView()
+                        .opacity(store.mode == .colorwayParser ? 1 : 0)
+                        .allowsHitTesting(store.mode == .colorwayParser)
+                }
 
-                ColorwayParserView()
-                    .opacity(store.mode == .colorwayParser ? 1 : 0)
-                    .allowsHitTesting(store.mode == .colorwayParser)
+                Divider()
+
+                // Status bar adapts per mode.
+                StatusBarView()
             }
-
-            Divider()
-
-            // Status bar adapts per mode.
-            StatusBarView()
         }
         .frame(minWidth: 800, minHeight: 600)
         // Library-mode keyboard shortcuts (1-5, 0, X, Space, arrows,
