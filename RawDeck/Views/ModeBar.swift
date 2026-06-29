@@ -36,12 +36,17 @@ struct ModeBar: View {
             // show "Library: 247 photos" or "Colorway: <image name>"
             // depending on mode.
             modeStatus
-                .font(.caption)
-                .foregroundColor(.secondary)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.bar)
+        .padding(.horizontal, RDSpace.l)
+        .padding(.vertical, RDSpace.s)
+        .background(RDColor.surfaceRaised)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(RDColor.hairline)
+                .frame(height: 0.5)
+        }
     }
 
     @ViewBuilder

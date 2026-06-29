@@ -174,9 +174,14 @@ struct StatusBarView: View {
             Spacer()
             shortcutHint
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.bar)
+        .padding(.horizontal, RDSpace.m)
+        .padding(.vertical, RDSpace.xs + 2)
+        .background(RDColor.surfaceRaised)
+        .overlay(alignment: .top) {
+            Rectangle()
+                .fill(RDColor.hairline)
+                .frame(height: 0.5)
+        }
     }
 
     @ViewBuilder
@@ -184,17 +189,18 @@ struct StatusBarView: View {
         if store.isLoading {
             ProgressView()
                 .controlSize(.small)
+                .tint(RDColor.textSecondary)
             Text("Importing…")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
         } else {
             Text("\(store.photos.count) photos")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
             if !store.selectedIDs.isEmpty {
                 Text("· \(store.selectedIDs.count) selected")
-                    .font(.caption)
-                    .foregroundColor(.accentColor)
+                    .font(RDType.caption)
+                    .foregroundStyle(RDColor.accentPrimary)
             }
         }
     }
@@ -203,20 +209,20 @@ struct StatusBarView: View {
     private var colorwayParserStatus: some View {
         if colorwayParser.displayImage == nil {
             Text("Paste or drop a reference image to start.")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
         } else if let err = colorwayParser.lastError {
             Text(err)
-                .font(.caption)
-                .foregroundColor(.red)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.destructive)
         } else if colorwayParser.preset != nil {
             Text("Preset ready: \(colorwayParser.presetName)")
-                .font(.caption)
-                .foregroundColor(.accentColor)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.accentPrimary)
         } else {
             Text("Analyzing…")
-                .font(.caption)
-                .foregroundColor(.secondary)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
         }
     }
 
@@ -225,12 +231,12 @@ struct StatusBarView: View {
             switch store.mode {
             case .library:
                 Text("1-5: rate · 0: clear · X: reject · Space: lightbox · ←/→: nav · Esc: close · Delete: trash · ⌘A: all · ⌘O: import · ⌘⇧O: open in Pixelmator · Double-click: open photo")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .font(RDType.caption)
+                    .foregroundStyle(RDColor.textTertiary)
             case .colorwayParser:
                 Text("⌘O: open · ⌘V: paste · ⌘E: export .xmp · ⌘⇧E: recreation sheet")
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .font(RDType.caption)
+                    .foregroundStyle(RDColor.textTertiary)
             }
         }
     }

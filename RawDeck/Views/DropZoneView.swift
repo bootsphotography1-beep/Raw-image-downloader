@@ -10,47 +10,48 @@ struct DropZoneView: View {
 
     var body: some View {
         ZStack {
-            // Background: subtle paper-tone (matches editorial design language)
-            Color(NSColor.windowBackgroundColor)
+            // Background: deep neutral so the dashed border has contrast.
+            // Locked to the design system surface — never adapts to system
+            // appearance, so it stays color-accurate against the photos.
+            RDColor.surfaceBase
 
-            VStack(spacing: 24) {
+            VStack(spacing: RDSpace.xl) {
                 Image(systemName: "rectangle.stack.badge.plus")
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(width: 88, height: 88)
-                    .foregroundColor(isTargeted ? .accentColor : .secondary)
+                    .foregroundStyle(isTargeted ? RDColor.accentPrimary : RDColor.textSecondary)
 
-                VStack(spacing: 8) {
+                VStack(spacing: RDSpace.s) {
                     Text("Drop a folder of RAW photos here")
-                        .font(.title2)
-                        .fontWeight(.medium)
+                        .font(RDType.titleMedium)
+                        .foregroundStyle(RDColor.textPrimary)
 
                     Text("CR3, ARW, NEF, RAF, DNG, ORF, RW2 and more")
                         .font(.callout)
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(RDColor.textSecondary)
                 }
 
                 Button {
                     pickFolder()
                 } label: {
                     Label("Choose Folder…", systemImage: "folder")
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 6)
+                        .padding(.horizontal, RDSpace.m)
+                        .padding(.vertical, RDSpace.xs + 2)
                 }
-                .controlSize(.large)
-                .buttonStyle(.borderedProminent)
+                .rdButton(.primary)
             }
-            .padding(48)
+            .padding(RDSpace.xxxl)
             .frame(maxWidth: 560)
             .background(
-                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                RoundedRectangle(cornerRadius: RDRadius.panel, style: .continuous)
                     .strokeBorder(
-                        isTargeted ? Color.accentColor : Color.secondary.opacity(0.3),
-                        style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+                        isTargeted ? RDColor.accentPrimary : RDColor.hairlineStrong,
+                        style: StrokeStyle(lineWidth: 1.5, dash: [8, 6])
                     )
                     .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(isTargeted ? Color.accentColor.opacity(0.06) : Color.clear)
+                        RoundedRectangle(cornerRadius: RDRadius.panel, style: .continuous)
+                            .fill(isTargeted ? RDColor.accentPrimaryDim : Color.clear)
                     )
             )
         }

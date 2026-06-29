@@ -17,12 +17,11 @@ struct ThumbnailCell: View {
     }
 
     var body: some View {
-        VStack(spacing: 6) {
+        VStack(spacing: RDSpace.xs + 2) {
             ZStack(alignment: .topTrailing) {
                 // Thumbnail area
                 ZStack {
-                    Rectangle()
-                        .fill(Color(NSColor.controlBackgroundColor))
+                    RDColor.surfaceRaised
 
                     if let thumb = photo.thumbnail {
                         Image(nsImage: thumb)
@@ -32,9 +31,10 @@ struct ThumbnailCell: View {
                         VStack {
                             ProgressView()
                                 .controlSize(.small)
+                                .tint(RDColor.textSecondary)
                             Text("Loading…")
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
+                                .font(RDType.caption)
+                                .foregroundStyle(RDColor.textSecondary)
                         }
                     }
                 }
@@ -42,25 +42,27 @@ struct ThumbnailCell: View {
                 .aspectRatio(1, contentMode: .fit)
                 .clipped()
 
-                // Reject X badge (top-right)
+                // Reject X badge (top-right) — destructive color from the
+                // design system, not the system .red which can shift in
+                // dark mode.
                 if photo.isRejected {
                     Image(systemName: "xmark.circle.fill")
                         .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, .red)
+                        .foregroundStyle(.white, RDColor.destructive)
                         .font(.title2)
-                        .padding(6)
+                        .padding(RDSpace.xs + 2)
                 }
             }
             .overlay(
-                RoundedRectangle(cornerRadius: 0)
+                RoundedRectangle(cornerRadius: RDRadius.card, style: .continuous)
                     .strokeBorder(
-                        isSelected ? Color.accentColor :
-                            (store.hoveredPhotoID == photo.id ? Color.white.opacity(0.6) : Color.clear),
-                        lineWidth: 3
+                        isSelected ? RDColor.accentPrimary :
+                            (store.hoveredPhotoID == photo.id ? RDColor.hairlineAccent : Color.clear),
+                        lineWidth: isSelected ? 2 : 1
                     )
             )
             .background(
-                Color.black.opacity(isSelected ? 0.04 : 0)
+                RDColor.surfaceBase.opacity(isSelected ? 0.04 : 0)
             )
             // Track hover so the spacebar (handled in ContentView) knows
             // which photo to open the lightbox on. SwiftUI's onHover is
@@ -78,13 +80,12 @@ struct ThumbnailCell: View {
             // Filename + stars
             VStack(spacing: 2) {
                 Text(photo.fileName)
-                    .font(.caption)
+                    .font(RDType.caption)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                    .foregroundColor(.primary)
+                    .foregroundStyle(RDColor.textPrimary)
 
-                StarRow(rating: photo.starRating, isRejected: photo.isRejected)
-                    .font(.caption2)
+                RDStarRow(rating: photo.starRating, isRejected: photo.isRejected)
             }
         }
         .contentShape(Rectangle())
@@ -131,20 +132,3 @@ struct ThumbnailCell: View {
     }
 }
 
-/// Row of 5 star icons. Tap to set rating.
-struct StarRow: View {
-    let rating: Int
-    let isRejected: Bool
-
-    var body: some View {
-        // Placeholder: shows 5 grey stars with the current rating filled in.
-        // Tap to set rating (handled by parent ThumbnailCell, not here —
-        // we don't want the star row to intercept the cell's click).
-        HStack(spacing: 1) {
-            ForEach(1...5, id: \.self) { i in
-                Image(systemName: i <= rating ? "star.fill" : "star")
-                    .foregroundColor(isRejected ? .red : (i <= rating ? .yellow : .secondary.opacity(0.3)))
-            }
-        }
-    }
-}

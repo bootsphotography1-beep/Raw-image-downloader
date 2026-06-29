@@ -22,36 +22,36 @@ struct ColorwayParserView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(NSColor.textBackgroundColor))
+        .background(RDColor.surfaceBase)
     }
 
     // MARK: - Empty state
 
     private var emptyLayout: some View {
-        VStack(spacing: 16) {
+        VStack(spacing: RDSpace.l) {
             Image(systemName: "photo.on.rectangle.angled")
                 .font(.system(size: 56))
-                .foregroundColor(.secondary)
+                .foregroundStyle(RDColor.textSecondary)
             Text("Drop a reference image here")
-                .font(.title2)
+                .font(RDType.titleMedium)
             Text("…or paste from clipboard (⌘V) or click below to open one.")
-                .foregroundColor(.secondary)
+                .foregroundStyle(RDColor.textSecondary)
                 .multilineTextAlignment(.center)
 
             Button("Open Image…") {
                 colorwayParser.openImageViaPanel()
             }
-            .controlSize(.large)
+            .rdButton(.primary)
             .keyboardShortcut("o", modifiers: .command)
 
             if let err = colorwayParser.lastError {
                     Text(err)
-                    .font(.caption)
-                    .foregroundColor(.red)
-                    .padding(.top, 8)
+                    .font(RDType.caption)
+                    .foregroundStyle(RDColor.destructive)
+                    .padding(.top, RDSpace.s)
             }
         }
-                    .padding(40)
+                    .padding(RDSpace.xxxl)
         // Drop target for image files. We accept any file that AppKit
         // can read as an image (JPEG/PNG/HEIC/TIFF/etc). The closure must
         // return a Bool — true signals "I accepted this drop" so other
@@ -92,11 +92,11 @@ struct ColorwayParserView: View {
     /// any window size.
     private func imagePreview(image: NSImage) -> some View {
         ZStack {
-            Color(NSColor.windowBackgroundColor)
+            RDColor.surfaceBase
             Image(nsImage: image)
                 .resizable()
                 .scaledToFit()
-                    .padding(12)
+                    .padding(RDSpace.m)
         }
     }
 
@@ -116,7 +116,7 @@ struct ColorwayParserView: View {
                 }
                 .controlSize(.small)
             }
-                    .padding(12)
+                    .padding(RDSpace.m)
 
             Divider()
 
@@ -124,7 +124,7 @@ struct ColorwayParserView: View {
             ScrollView {
                 if let preset = colorwayParser.preset {
                     VStack(alignment: .leading, spacing: 0) {
-                    sectionHeader("Basic")
+                    presetSectionHeader("Basic")
                     presetRow("Exposure", preset.exposure, format: .ev)
                     presetRow("Contrast", preset.contrast)
                     presetRow("Highlights", preset.highlights, note: "negative = recover")
@@ -137,19 +137,19 @@ struct ColorwayParserView: View {
                     presetRow("Vibrance", preset.vibrance)
                     presetRow("Saturation", preset.saturation)
 
-                    sectionHeader("White Balance")
+                    presetSectionHeader("White Balance")
                     presetRow("Temperature", preset.temperature)
                     presetRow("Tint", preset.tint)
 
-                    sectionHeader("Detail")
-                    dimmedNote("Sharpening and noise reduction are not inferred from a finished image. Suggested starting values: Sharpening 25, NR 25.")
+                    presetSectionHeader("Detail")
+                    presetNote("Sharpening and noise reduction are not inferred from a finished image. Suggested starting values: Sharpening 25, NR 25.")
                     }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 8)
+                    .padding(.horizontal, RDSpace.m)
+                    .padding(.vertical, RDSpace.s)
                 } else if let err = colorwayParser.lastError {
                     Text(err)
-                    .foregroundColor(.red)
-                    .padding(12)
+                        .foregroundStyle(RDColor.destructive)
+                        .padding(RDSpace.m)
                 } else {
                     // Shown only if analysis is slow enough that SwiftUI
                     // renders a frame between image-load and preset-set.
@@ -157,19 +157,20 @@ struct ColorwayParserView: View {
                     // this is rarely seen — but kept as a fallback for
                     // very large images.
                     ProgressView("Analyzing…")
-                    .padding(40)
+                    .padding(RDSpace.xxxl)
                 }
             }
 
             Divider()
 
             // Export buttons
-            HStack(spacing: 8) {
+            HStack(spacing: RDSpace.s) {
                 Button {
                     colorwayParser.exportXMP()
                 } label: {
                     Label("Export .xmp", systemImage: "square.and.arrow.up")
                 }
+                .rdButton(.secondary)
                 .keyboardShortcut("e", modifiers: .command)
                 .disabled(!colorwayParser.canExport)
 
@@ -178,29 +179,31 @@ struct ColorwayParserView: View {
                 } label: {
                     Label("Recreation Sheet", systemImage: "doc.text")
                 }
+                .rdButton(.secondary)
                 .keyboardShortcut("e", modifiers: [.command, .shift])
                 .disabled(!colorwayParser.canExport)
             }
-                    .padding(12)
+                    .padding(RDSpace.m)
         }
     }
 
     /// Section header inside the preset panel (e.g. "Basic", "White Balance").
-    private func sectionHeader(_ text: String) -> some View {
+    private func presetSectionHeader(_ text: String) -> some View {
         Text(text.uppercased())
-            .font(.caption)
-            .fontWeight(.semibold)
-            .foregroundColor(.secondary)
-            .padding(.top, 12)
-            .padding(.bottom, 4)
+            .font(RDType.eyebrow)
+            .tracking(1.2)
+            .foregroundStyle(RDColor.textTertiary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.top, RDSpace.l)
+            .padding(.bottom, RDSpace.xs)
     }
 
     /// Dimmed explanatory note (used for the "Detail" panel section).
-    private func dimmedNote(_ text: String) -> some View {
+    private func presetNote(_ text: String) -> some View {
         Text(text)
-            .font(.caption)
-            .foregroundColor(.secondary)
-            .padding(.top, 8)
+            .font(RDType.caption)
+            .foregroundStyle(RDColor.textTertiary)
+            .padding(.top, RDSpace.s)
     }
 
     /// One row in the preset values list: name on the left, value on the right.
@@ -216,16 +219,14 @@ struct ColorwayParserView: View {
     ) -> some View {
         HStack {
             Text(name)
-                .foregroundColor(dimmed ? .secondary : .primary)
+                .foregroundStyle(dimmed ? RDColor.textSecondary : RDColor.textPrimary)
             if let note = note {
                 Text("(\(note))")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(RDType.caption)
+                    .foregroundStyle(RDColor.textTertiary)
             }
             Spacer()
-            Text(formatValue(value, style: format))
-                .font(.system(.body, design: .monospaced))
-                .foregroundColor(dimmed ? .secondary : .primary)
+            RDNumberReadout(value, format: format == .ev ? .ev : .signed, dimmed: dimmed)
         }
         .padding(.vertical, 2)
     }
@@ -233,18 +234,6 @@ struct ColorwayParserView: View {
     private enum NumberFormat {
         case signed
         case ev
-    }
-
-    /// Format a signed Double with 2 decimal places, e.g. "+12.50".
-    private func formatValue(_ d: Double, style: NumberFormat) -> String {
-        if abs(d) < 0.005 { return "0" }
-        let sign = d > 0 ? "+" : ""
-        switch style {
-        case .signed:
-            return String(format: "\(sign)%.2f", d)
-        case .ev:
-            return String(format: "\(sign)%.2f EV", d)
-        }
     }
 
     // MARK: - Drop / paste handling

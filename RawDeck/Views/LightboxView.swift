@@ -40,7 +40,10 @@ struct LightboxContents: View {
     var body: some View {
         ZStack {
             // Solid black backdrop so the photo pops.
-            Color.black.ignoresSafeArea()
+            // The stage is intentionally true black — the deepest possible
+            // void against which the sensor pixels are seen. This is the
+            // one surface in the app where pure black is correct.
+            RDColor.stageBlack.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 header
@@ -68,38 +71,37 @@ struct LightboxContents: View {
     // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: RDSpace.m) {
             // Filename + position counter
             VStack(alignment: .leading, spacing: 2) {
                 Text(photo.fileName)
-                    .font(.headline)
-                    .foregroundColor(.white)
+                    .font(RDType.titleMedium)
+                    .foregroundStyle(RDColor.textOnStage)
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let idx = store.photos.firstIndex(where: { $0.id == photo.id }) {
                     Text("Photo \(idx + 1) of \(store.photos.count)")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
+                        .font(RDType.caption)
+                        .foregroundStyle(RDColor.textOnStageDim)
                 }
             }
             Spacer()
             // Star row for the current photo (read-only-ish; press 1-5 to change)
-            StarRow(rating: photo.starRating, isRejected: photo.isRejected)
-                .font(.title3)
+            RDStarRow(rating: photo.starRating, isRejected: photo.isRejected, size: 14)
             // Close button
             Button {
                 store.closeLightbox()
             } label: {
                 Image(systemName: "xmark.circle.fill")
                     .font(.title2)
-                    .foregroundColor(.white.opacity(0.8))
+                    .foregroundStyle(RDColor.textOnStage.opacity(0.8))
             }
             .buttonStyle(.plain)
             .help("Close lightbox (Esc)")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 10)
-        .background(Color.black.opacity(0.4))
+        .padding(.horizontal, RDSpace.l)
+        .padding(.vertical, RDSpace.s + 2)
+        .background(RDColor.stageBlack.opacity(0.4))
     }
 
     // MARK: - Photo stage
@@ -137,13 +139,13 @@ struct LightboxContents: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .opacity(0.85)
             } else {
-                VStack(spacing: 8) {
+                VStack(spacing: RDSpace.s) {
                     ProgressView()
                         .controlSize(.large)
-                        .tint(.white)
+                        .tint(RDColor.textOnStage)
                     Text("Loading preview…")
-                        .font(.caption)
-                        .foregroundColor(.white.opacity(0.6))
+                        .font(RDType.caption)
+                        .foregroundStyle(RDColor.textOnStageDim)
                 }
             }
 
@@ -153,9 +155,9 @@ struct LightboxContents: View {
                     HStack {
                         Image(systemName: "xmark.circle.fill")
                             .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, .red)
+                            .foregroundStyle(.white, RDColor.destructive)
                             .font(.largeTitle)
-                            .padding(12)
+                            .padding(RDSpace.m)
                         Spacer()
                     }
                     Spacer()
@@ -170,7 +172,7 @@ struct LightboxContents: View {
     private var thumbnailStrip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
+                HStack(spacing: RDSpace.xs + 2) {
                     ForEach(Array(store.photos.enumerated()), id: \.element.id) { idx, p in
                         LightboxStripCell(
                             photo: p,
@@ -184,11 +186,11 @@ struct LightboxContents: View {
                         }
                     }
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .padding(.horizontal, RDSpace.m)
+                .padding(.vertical, RDSpace.s)
             }
             .frame(height: 96)
-            .background(Color.black.opacity(0.6))
+            .background(RDColor.stageBlack.opacity(0.6))
             .onChange(of: photo.id) { newID in
                 // Auto-scroll the strip so the current cell is always visible.
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -200,7 +202,7 @@ struct LightboxContents: View {
 }
 
 /// One cell in the lightbox's bottom strip. Smaller than the grid cell;
-/// shows the thumbnail with a yellow border when current and a star/reject
+/// shows the thumbnail with an accent border when current and a star/reject
 /// overlay. Tapping jumps the main view to that photo.
 struct LightboxStripCell: View {
     @ObservedObject var photo: Photo
@@ -210,8 +212,7 @@ struct LightboxStripCell: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             ZStack {
-                Rectangle()
-                    .fill(Color(NSColor.controlBackgroundColor).opacity(0.3))
+                RDColor.surfaceRaised.opacity(0.3)
                 if let thumb = photo.thumbnail {
                     Image(nsImage: thumb)
                         .resizable()
@@ -219,26 +220,26 @@ struct LightboxStripCell: View {
                 } else {
                     ProgressView()
                         .controlSize(.small)
-                        .tint(.white)
+                        .tint(RDColor.textOnStage)
                 }
             }
             .frame(width: 80, height: 80)
-            .clipShape(RoundedRectangle(cornerRadius: 4))
+            .clipShape(RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous))
 
             // Reject badge
             if photo.isRejected {
                 Image(systemName: "xmark.circle.fill")
                     .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, .red)
+                    .foregroundStyle(.white, RDColor.destructive)
                     .font(.caption)
                     .padding(2)
             }
         }
         .overlay(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
                 .strokeBorder(
-                    isCurrent ? Color.yellow : Color.white.opacity(0.2),
-                    lineWidth: isCurrent ? 3 : 1
+                    isCurrent ? RDColor.accentPrimary : RDColor.textOnStage.opacity(0.2),
+                    lineWidth: isCurrent ? 2 : 1
                 )
         )
         .overlay(alignment: .bottom) {
@@ -248,7 +249,7 @@ struct LightboxStripCell: View {
                     ForEach(1...photo.starRating, id: \.self) { _ in
                         Image(systemName: "star.fill")
                             .font(.system(size: 7))
-                            .foregroundColor(.yellow)
+                            .foregroundStyle(RDColor.starActive)
                     }
                 }
                 .padding(.bottom, 2)

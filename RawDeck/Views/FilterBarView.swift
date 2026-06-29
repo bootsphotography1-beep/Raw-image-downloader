@@ -20,16 +20,16 @@ struct FilterBarView: View {
     }
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: RDSpace.m) {
             // Status text
-            HStack(spacing: 6) {
+            HStack(spacing: RDSpace.xs + 2) {
                 if hasActiveFilter {
                     Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                        .foregroundColor(.accentColor)
+                        .foregroundStyle(RDColor.accentPrimary)
                 }
                 Text(statusText)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
+                    .font(RDType.caption)
+                    .foregroundStyle(RDColor.textSecondary)
             }
 
             Spacer()
@@ -37,7 +37,7 @@ struct FilterBarView: View {
             // Rating floor — 5 star buttons. Each button sets the
             // rating filter to that value (so clicking ★3 means "show
             // 3, 4, and 5 stars"). The currently-active floor is
-            // highlighted yellow.
+            // highlighted using the star active color.
             HStack(spacing: 2) {
                 ForEach(1...5, id: \.self) { i in
                     StarFilterButton(stars: i)
@@ -50,7 +50,7 @@ struct FilterBarView: View {
                     store.resetFilters()
                 } label: {
                     Image(systemName: "xmark.circle.fill")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(RDColor.textSecondary)
                 }
                 .buttonStyle(.plain)
                 .help("Clear all filters (show every photo)")
@@ -63,30 +63,35 @@ struct FilterBarView: View {
             Button {
                 store.hideRejected.toggle()
             } label: {
-                HStack(spacing: 4) {
+                HStack(spacing: RDSpace.xs) {
                     Image(systemName: store.hideRejected ? "eye.slash.fill" : "eye.slash")
                         .font(.caption)
                     Text(store.hideRejected ? "Hiding rejected" : "Hide rejected")
-                        .font(.caption)
+                        .font(RDType.caption)
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, RDSpace.s)
                 .padding(.vertical, 3)
                 .background(
-                    Capsule()
+                    Capsule(style: .continuous)
                         .fill(store.hideRejected
-                              ? Color.red.opacity(0.15)
-                              : Color.secondary.opacity(0.1))
+                              ? RDColor.destructiveDim
+                              : RDColor.surfaceElevated)
                 )
-                .foregroundColor(store.hideRejected ? .red : .secondary)
+                .foregroundStyle(store.hideRejected ? RDColor.destructive : RDColor.textSecondary)
             }
             .buttonStyle(.plain)
             .help(store.hideRejected
                   ? "Show rejected photos again"
                   : "Hide rejected photos from the grid")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(.bar)
+        .padding(.horizontal, RDSpace.l)
+        .padding(.vertical, RDSpace.xs + 2)
+        .background(RDColor.surfaceRaised)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(RDColor.hairline)
+                .frame(height: 0.5)
+        }
     }
 
     /// "Showing N of M" text. Includes the rating floor when active.
@@ -106,10 +111,10 @@ struct FilterBarView: View {
     }
 }
 
-/// One button in the rating-floor row. Shows `stars` filled stars (yellow
-/// when active, dim otherwise) and `5 - stars` empty stars. Clicking
-/// sets `store.ratingFilter = stars`. Clicking the already-active button
-/// clears the filter back to 0 (toggle behaviour).
+/// One button in the rating-floor row. Shows `stars` filled stars (warm
+/// amber when active, dim otherwise) and `5 - stars` empty stars.
+/// Clicking sets `store.ratingFilter = stars`. Clicking the already-active
+/// button clears the filter back to 0 (toggle behaviour).
 struct StarFilterButton: View {
     @EnvironmentObject var store: PhotoStore
     let stars: Int
@@ -125,45 +130,26 @@ struct StarFilterButton: View {
                 store.setRatingFilter(stars)
             }
         } label: {
-            HStack(spacing: 0) {
-                // Filled stars
-                ForEach(1...stars, id: \.self) { _ in
-                    Image(systemName: "star.fill")
-                        .font(.system(size: 13))
-                        .foregroundColor(isActive ? .yellow : .yellow.opacity(0.7))
-                }
-                // Empty stars. Guard against the empty range: when
-                // stars == 5 there are no empty stars, and `6...5`
-                // traps at runtime in Swift. Use a static empty array
-                // in that case.
-                ForEach(emptyStarIndices, id: \.self) { _ in
-                    Image(systemName: "star")
-                        .font(.system(size: 13))
-                        .foregroundColor(isActive ? .yellow.opacity(0.5) : .secondary.opacity(0.4))
-                }
-            }
+            RDStarRow(
+                rating: stars,
+                size: 13,
+                isInteractive: false
+            )
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 4)
+        .padding(.horizontal, RDSpace.xs)
         .padding(.vertical, 2)
         .background(
-            RoundedRectangle(cornerRadius: 4)
-                .fill(isActive ? Color.yellow.opacity(0.15) : Color.clear)
+            RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
+                .fill(isActive ? RDColor.starActiveDim : Color.clear)
         )
         .overlay(
-            RoundedRectangle(cornerRadius: 4)
+            RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
                 .strokeBorder(
-                    isActive ? Color.yellow.opacity(0.5) : Color.clear,
+                    isActive ? RDColor.starActive.opacity(0.5) : Color.clear,
                     lineWidth: 1
                 )
         )
         .help("Show photos rated \(stars) or higher")
-    }
-
-    /// Indices for the dim/empty stars. Empty when `stars == 5` to avoid
-    /// the runtime trap on the reversed `6...5` range.
-    private var emptyStarIndices: [Int] {
-        guard stars < 5 else { return [] }
-        return Array((stars + 1)...5)
     }
 }

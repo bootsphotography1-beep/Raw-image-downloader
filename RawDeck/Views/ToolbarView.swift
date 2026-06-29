@@ -9,7 +9,7 @@ struct ToolbarView: View {
     @EnvironmentObject var store: PhotoStore
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: RDSpace.m) {
             // Back to drop zone
             Button {
                 store.photos = []
@@ -25,14 +25,14 @@ struct ToolbarView: View {
 
             // Folder name + photo count
             if let folder = store.currentFolder {
-                HStack(spacing: 6) {
+                HStack(spacing: RDSpace.xs) {
                     Image(systemName: "folder.fill")
-                        .foregroundColor(.secondary)
+                        .foregroundStyle(RDColor.textSecondary)
                     Text(folder.lastPathComponent)
-                        .font(.headline)
+                        .font(RDType.titleMedium)
                     Text("(\(store.photos.count) photos)")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
+                        .font(RDType.caption)
+                        .foregroundStyle(RDColor.textSecondary)
                 }
             }
 
@@ -63,23 +63,23 @@ struct ToolbarView: View {
             // Star count badges — show the TOTAL count of photos at each
             // rating (not filtered). Helps the user see at a glance how
             // many 5-stars they've rated in the whole session.
-            HStack(spacing: 8) {
+            HStack(spacing: RDSpace.s) {
                 ForEach(1...5, id: \.self) { i in
                     let n = store.count(rating: i)
                     if n > 0 {
                         HStack(spacing: 2) {
                             Image(systemName: "star.fill")
                                 .font(.caption2)
-                                .foregroundColor(.yellow)
+                                .foregroundStyle(RDColor.starActive)
                             Text("\(n)")
-                                .font(.caption)
+                                .font(RDType.caption)
                                 .monospacedDigit()
                         }
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, RDSpace.xs + 2)
                         .padding(.vertical, 2)
                         .background(
-                            RoundedRectangle(cornerRadius: 4)
-                                .fill(Color.secondary.opacity(0.1))
+                            RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
+                                .fill(RDColor.surfaceElevated)
                         )
                     }
                 }
@@ -87,16 +87,16 @@ struct ToolbarView: View {
                     HStack(spacing: 2) {
                         Image(systemName: "xmark.circle.fill")
                             .font(.caption2)
-                            .foregroundColor(.red)
+                            .foregroundStyle(RDColor.destructive)
                         Text("\(store.rejectedCount)")
-                            .font(.caption)
+                            .font(RDType.caption)
                             .monospacedDigit()
                     }
-                    .padding(.horizontal, 6)
+                    .padding(.horizontal, RDSpace.xs + 2)
                     .padding(.vertical, 2)
                     .background(
-                        RoundedRectangle(cornerRadius: 4)
-                            .fill(Color.red.opacity(0.1))
+                        RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
+                            .fill(RDColor.destructiveDim)
                     )
                 }
             }
@@ -128,8 +128,13 @@ struct ToolbarView: View {
             .disabled(store.photos.isEmpty)
             .help("Move selected photos (or all rejected photos) to the Trash")
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(.bar)
+        .padding(.horizontal, RDSpace.l)
+        .padding(.vertical, RDSpace.s + 2)
+        .background(RDColor.surfaceRaised)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(RDColor.hairline)
+                .frame(height: 0.5)
+        }
     }
 }
