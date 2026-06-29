@@ -28,6 +28,7 @@
 		A1000019 /* RecreationSheetWriter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000019 /* RecreationSheetWriter.swift */; };
 		A1000020 /* ModeBar.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000020 /* ModeBar.swift */; };
 		A1000021 /* ColorwayParserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000021 /* ColorwayParserView.swift */; };
+		A1000022 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000022 /* DesignSystem.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -52,6 +53,7 @@
 		B1000019 /* RecreationSheetWriter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RecreationSheetWriter.swift; sourceTree = "<group>"; };
 		B1000020 /* ModeBar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModeBar.swift; sourceTree = "<group>"; };
 		B1000021 /* ColorwayParserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorwayParserView.swift; sourceTree = "<group>"; };
+		B1000022 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 		B2000001 /* RawDeck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RawDeck.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -83,6 +85,7 @@
 				D1000005 /* Views */,
 				D1000006 /* Services */,
 				D1000007 /* ColorwayParser */,
+				D1000008 /* DesignSystem */,
 			);
 			path = RawDeck;
 			sourceTree = "<group>";
@@ -141,6 +144,14 @@
 				B1000019 /* RecreationSheetWriter.swift */,
 			);
 			path = ColorwayParser;
+			sourceTree = "<group>";
+		};
+		D1000008 /* DesignSystem */ = {
+			isa = PBXGroup;
+			children = (
+				B1000022 /* DesignSystem.swift */,
+			);
+			path = DesignSystem;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -232,6 +243,7 @@
 				A1000019 /* RecreationSheetWriter.swift in Sources */,
 				A1000020 /* ModeBar.swift in Sources */,
 				A1000021 /* ColorwayParserView.swift in Sources */,
+				A1000022 /* DesignSystem.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
