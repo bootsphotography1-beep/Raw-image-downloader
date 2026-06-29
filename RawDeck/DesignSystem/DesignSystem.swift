@@ -380,11 +380,6 @@ public struct RDNavRail: View {
                             .fill(RDColor.accentPrimaryDim)
                             .frame(width: 40, height: 36)
                     } else {
-                        // Hover background comes from `.onHover` via
-                        // a state — we keep it simple by NOT adding
-                        // hover state and just letting the icon color
-                        // change. Pro apps usually do this; the pill
-                        // background is reserved for the active state.
                         EmptyView()
                     }
                     // 2pt left-edge accent bar (active only).
@@ -395,7 +390,15 @@ public struct RDNavRail: View {
                             .offset(x: -25)
                     }
                     Image(systemName: item.systemImage)
-                        .font(.system(size: 20, weight: isActive ? .semibold : .regular))
+                        // CRITICAL: keep the same font weight regardless
+                        // of active state. SF Symbols' semibold vs regular
+                        // weights render at slightly different widths,
+                        // and that width change shifts the centered icon
+                        // within its frame, which propagates downstream
+                        // and causes the main content area to shift left
+                        // or right by a pixel or two on click. We vary
+                        // only color to indicate active state.
+                        .font(.system(size: 20, weight: .regular))
                         .foregroundStyle(isActive
                                          ? RDColor.accentPrimary
                                          : RDColor.textSecondary)

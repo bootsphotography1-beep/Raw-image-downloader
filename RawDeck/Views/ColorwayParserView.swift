@@ -214,20 +214,32 @@ struct ColorwayParserView: View {
     /// Top bar: reference name · target name · mode dropdown · Clear.
     private var coachingHeader: some View {
         HStack(spacing: RDSpace.m) {
-            // Reference label
+            // Reference label + tiny thumbnail
             HStack(spacing: RDSpace.xs) {
+                if let referenceImage = colorwayParser.displayImage {
+                Image(nsImage: referenceImage)
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: 24, height: 24)
+                    .clipShape(RoundedRectangle(cornerRadius: RDSpace.xs))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: RDSpace.xs)
+                            .strokeBorder(RDColor.hairline, lineWidth: 0.5)
+                    )
+                } else {
                 Image(systemName: "photo")
                     .foregroundStyle(RDColor.textSecondary)
+                }
                 Text("Reference:")
-                    .font(RDType.caption)
-                    .foregroundStyle(RDColor.textTertiary)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textTertiary)
                 Text(colorwayParser.referenceName.isEmpty
-                     ? "(none)"
-                     : colorwayParser.referenceName)
-                    .font(RDType.captionMonoEmph)
-                    .foregroundStyle(RDColor.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+                 ? "(none)"
+                 : colorwayParser.referenceName)
+                .font(RDType.captionMonoEmph)
+                .foregroundStyle(RDColor.textPrimary)
+                .lineLimit(1)
+                .truncationMode(.middle)
             }
 
             Image(systemName: "arrow.right")
@@ -282,60 +294,78 @@ struct ColorwayParserView: View {
         .frame(maxWidth: 140)
     }
 
-    /// The split-slider comparison: reference on the left of the
-    /// divider, target on the right. Divider is draggable.
+    /// The before/after stage: target RAW fills the stage, with the
+    /// CPU-rendered "after" image overlaid on the right of a draggable
+    /// slider divider. The reference image is NOT in the stage — it
+    /// lives in the coaching header as a small thumbnail.
     private var comparisonStage: some View {
         GeometryReader { geo in
             ZStack {
                 RDColor.stageBlack
 
-                if let referenceImage = colorwayParser.displayImage,
-                   let targetImage = colorwayParser.targetDisplayImage {
-                    // Target image fills the whole stage behind the
-                    // reference. Reference is overlaid with a
-                    // clipping mask on the left of the divider.
+                if let targetImage = colorwayParser.targetDisplayImage {
+                    // Compute the target's scaled-to-fit rect within the
+                    // stage. Both the original and the adjusted images
+                    // use the SAME rect so they overlap perfectly.
+                    let stageRect = CGRect(origin: .zero, size: geo.size)
+                    let imageRect = aspectFitRect(
+                        for: CGSize(width: targetImage.size.width,
+                                    height: targetImage.size.height),
+                        in: stageRect
+                    )
+
+                    // Original target — fills the whole imageRect.
                     Image(nsImage: targetImage)
                         .resizable()
-                        .scaledToFit()
+                        .frame(width: imageRect.width, height: imageRect.height)
+                        .position(x: imageRect.midX, y: imageRect.midY)
 
-                    Image(nsImage: referenceImage)
-                        .resizable()
-                        .scaledToFit()
-                        // Match the target's .scaledToFit rect so both
-                        // images occupy identical pixels.
-                        .frame(width: geo.size.width, height: geo.size.height)
-                        // Clip to the area to the LEFT of the divider.
-                        // The actual image content is centered inside
-                        // the stage (because .scaledToFit centers), so
-                        // we clip based on the divider x-coord which is
-                        // in stage coordinates.
-                        .mask(
-                            HStack(spacing: 0) {
-                                Color.black
-                                    .frame(width: dividerX(in: geo.size))
-                                Color.clear
-                            }
-                        )
+                    // Adjusted target — clipped to the right of the
+                    // divider, aligned to the same imageRect. Mask
+                    // reveals the adjusted image only on the right
+                    // side of the divider.
+                    if let adjusted = colorwayParser.targetAdjusted {
+                        Image(nsImage: adjusted)
+                            .resizable()
+                            .frame(width: imageRect.width, height: imageRect.height)
+                            .position(x: imageRect.midX, y: imageRect.midY)
+                            .mask(
+                                HStack(spacing: 0) {
+                                    Color.clear
+                                        .frame(width: adjustedClipLeftEdge(
+                                            dividerX: dividerX(in: geo.size),
+                                            imageRect: imageRect
+                                        ))
+                                    Color.black
+                                        .frame(width: max(0,
+                                                          imageRect.width - adjustedClipLeftEdge(
+                                                              dividerX: dividerX(in: geo.size),
+                                                              imageRect: imageRect
+                                                          )))
+                                }
+                                .frame(width: imageRect.width, height: imageRect.height)
+                            )
+                    }
 
-                    // Labels for which side is which.
-                    stageLabel("REFERENCE", alignment: .leading, padding: RDSpace.m)
-                        .foregroundStyle(RDColor.textOnStage)
-                        .frame(maxWidth: .infinity,
-                               maxHeight: .infinity,
-                               alignment: .topLeading)
-                        .padding(RDSpace.m)
+                    // Top-left label: "BEFORE / AFTER" chip.
+                    Text("BEFORE")
+                        .font(RDType.eyebrow)
+                        .tracking(1.5)
+                        .foregroundStyle(RDColor.textOnStageDim)
+                        .position(x: imageRect.minX + 36, y: imageRect.minY + 14)
                         .allowsHitTesting(false)
 
-                    stageLabel("YOUR RAW", alignment: .trailing, padding: RDSpace.m)
-                        .foregroundStyle(RDColor.textOnStage)
-                        .frame(maxWidth: .infinity,
-                               maxHeight: .infinity,
-                               alignment: .topTrailing)
-                        .padding(RDSpace.m)
-                        .allowsHitTesting(false)
+                    if colorwayParser.targetAdjusted != nil {
+                        Text("AFTER")
+                            .font(RDType.eyebrow)
+                            .tracking(1.5)
+                            .foregroundStyle(RDColor.accentPrimary)
+                            .position(x: imageRect.maxX - 36, y: imageRect.minY + 14)
+                            .allowsHitTesting(false)
+                    }
 
                     // The draggable divider.
-                    splitDivider(width: geo.size.width)
+                    splitDivider()
                         .position(x: dividerX(in: geo.size),
                                   y: geo.size.height / 2)
                         .gesture(
@@ -348,21 +378,40 @@ struct ColorwayParserView: View {
                                 }
                         )
                         // TODO: macOS 14+ keyboard nudges (←/→ 5%, Home/End jump).
-                                                // Blocked by deployment target = 13.0. Add when project
-                                                // moves to macOS 14. The drag gesture is the primary input.
-                } else if let referenceImage = colorwayParser.displayImage {
-                    // Reference-only — show the reference full-width
-                    // and a drop hint for the target on the right.
-                    HStack(spacing: 0) {
-                        Image(nsImage: referenceImage)
-                            .resizable()
-                            .scaledToFit()
-                            .padding(RDSpace.m)
-                        targetDropSlot
-                    }
+                        // Blocked by deployment target = 13.0. Add when project
+                        // moves to macOS 14. The drag gesture is the primary input.
+                } else {
+                    // Target not loaded — show the drop slot centered.
+                    targetDropSlot
                 }
             }
         }
+    }
+
+    /// Compute the rect that a `scaledToFit` image would occupy inside
+    /// `container`. Used to pin the original and adjusted images to the
+    /// same on-screen rect so the divider clips cleanly.
+    private func aspectFitRect(for imageSize: CGSize, in container: CGRect) -> CGRect {
+        guard imageSize.width > 0, imageSize.height > 0,
+              container.width > 0, container.height > 0 else {
+            return container
+        }
+        let scale = min(container.width / imageSize.width,
+                        container.height / imageSize.height)
+        let w = imageSize.width * scale
+        let h = imageSize.height * scale
+        let x = container.midX - w / 2
+        let y = container.midY - h / 2
+        return CGRect(x: x, y: y, width: w, height: h)
+    }
+
+    /// Where the adjusted image's left clip edge should start, in the
+    /// adjusted image's local coordinates. The divider x is in stage
+    /// coords; the imageRect is also in stage coords; so the clip width
+    /// inside the adjusted image is `dividerX − imageRect.minX`,
+    /// clamped to `[0, imageRect.width]`.
+    private func adjustedClipLeftEdge(dividerX: CGFloat, imageRect: CGRect) -> CGFloat {
+        return max(0, min(imageRect.width, dividerX - imageRect.minX))
     }
 
     /// X-coordinate of the divider within the stage.
@@ -370,16 +419,17 @@ struct ColorwayParserView: View {
         return max(8, min(size.width - 8, splitFraction * size.width))
     }
 
-    /// The draggable divider line + handle.
-    private func splitDivider(width: CGFloat) -> some View {
+    /// The draggable divider line + handle. Visible 2pt line with a 56pt
+    /// tall pill handle in the middle for easy grabbing.
+    private func splitDivider() -> some View {
         ZStack {
             Rectangle()
                 .fill(RDColor.surfaceElevated)
-                .frame(width: 4)
+                .frame(width: 2)
                 .overlay(
                     Rectangle().strokeBorder(RDColor.hairlineStrong, lineWidth: 0.5)
                 )
-            // Handle: pill shape in the middle of the divider.
+            // Handle: pill shape, sits on top of the divider line.
             Capsule()
                 .fill(RDColor.surfaceElevated)
                 .frame(width: 32, height: 56)
@@ -394,11 +444,13 @@ struct ColorwayParserView: View {
                 )
                 .shadow(color: .black.opacity(0.4), radius: 4, x: 0, y: 1)
         }
-        .frame(width: 32)  // hit area wider than visible divider line
+        // Hit area is 32pt wide (matches the pill handle); the visible
+        // divider line is just 2pt wide.
+        .frame(width: 32, height: 56)
+        .contentShape(Rectangle())
     }
-
-    /// Right-side "drop your RAW here" slot shown when only reference
-    /// is loaded.
+    /// Centered "drop your RAW here" slot shown when no target is
+    /// loaded yet.
     private var targetDropSlot: some View {
         VStack(spacing: RDSpace.m) {
             Image(systemName: "tray.and.arrow.down")
@@ -433,15 +485,9 @@ struct ColorwayParserView: View {
         }
     }
 
-    /// Top-of-stage eyebrow label (REFERENCE / YOUR RAW).
-    private func stageLabel(_ text: String,
-                            alignment: Alignment,
-                            padding: CGFloat) -> some View {
-        Text(text)
-            .font(RDType.eyebrow)
-            .tracking(1.5)
-            .foregroundStyle(RDColor.textOnStageDim)
-    }
+    // (stageLabel removed — was used for "REFERENCE / YOUR RAW" labels
+    //  in the old side-by-side layout. The new before/after layout
+    //  uses inline Text() calls in comparisonStage instead.)
 
     // MARK: - Right rail: coaching delta panel
 

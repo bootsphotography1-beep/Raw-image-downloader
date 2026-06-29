@@ -30,6 +30,7 @@
 		A1000021 /* ColorwayParserView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000021 /* ColorwayParserView.swift */; };
 		A1000022 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000022 /* DesignSystem.swift */; };
 			A1000023 /* CoachingDelta.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000023 /* CoachingDelta.swift */; };
+			A1000024 /* CPUDeltaRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000024 /* CPUDeltaRenderer.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -56,6 +57,7 @@
 		B1000021 /* ColorwayParserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorwayParserView.swift; sourceTree = "<group>"; };
 		B1000022 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 			B1000023 /* CoachingDelta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingDelta.swift; sourceTree = "<group>"; };
+			B1000024 /* CPUDeltaRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CPUDeltaRenderer.swift; sourceTree = "<group>"; };
 			B2000001 /* RawDeck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RawDeck.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -145,6 +147,7 @@
 				B1000018 /* XMPWriter.swift */,
 				B1000019 /* RecreationSheetWriter.swift */,
 					B1000023 /* CoachingDelta.swift */,
+				B1000024 /* CPUDeltaRenderer.swift */,
 			);
 			path = ColorwayParser;
 							sourceTree = "<group>";
@@ -248,6 +251,7 @@
 				A1000021 /* ColorwayParserView.swift in Sources */,
 				A1000022 /* DesignSystem.swift in Sources */,
 					A1000023 /* CoachingDelta.swift in Sources */,
+				A1000024 /* CPUDeltaRenderer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

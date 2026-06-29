@@ -75,6 +75,14 @@ final class ColorwayParserModel: ObservableObject {
     /// `nil` until both reference and target have loaded and analyzed.
     @Published private(set) var coachingDeltaRows: [CoachingDeltaRow] = []
 
+    /// CPU-rendered "after" preview of the target image with the
+    /// delta applied. Recomputed whenever `coachingDeltaRows` or
+    /// `targetDisplayImage` changes. Used by the slider in coaching
+    /// mode to show before/after on the target only.
+    ///
+    /// `nil` while rendering, or if no target is loaded.
+    @Published private(set) var targetAdjusted: NSImage? = nil
+
     /// Summary counts for the header chip in coaching mode.
     /// `nil` until delta is computed.
     var confidenceSummary: (high: Int, medium: Int, low: Int)? {
@@ -288,9 +296,12 @@ final class ColorwayParserModel: ObservableObject {
 
     /// Compute the coaching delta rows from the two stats.
     /// No-op until both `referenceStats` and `targetStats` exist.
+    /// On success, also kicks off a CPU render of the "after" target
+    /// image so the slider preview stays in sync.
     private func recomputeCoachingIfReady() {
         guard let ref = referenceStats, let tgt = targetStats else {
             self.coachingDeltaRows = []
+            self.targetAdjusted = nil
             return
         }
         // Derive a preset from each, then compute the delta to apply
@@ -298,12 +309,38 @@ final class ColorwayParserModel: ObservableObject {
         let refPreset = PresetMapper.derive(from: ref)
         let tgtPreset = PresetMapper.derive(from: tgt)
 
-        self.coachingDeltaRows = CoachingDeltaComputer.compute(
+        let rows = CoachingDeltaComputer.compute(
             reference: refPreset,
             target: tgtPreset,
             referenceStats: ref,
             targetStats: tgt
         )
+        self.coachingDeltaRows = rows
+
+        // Render the "after" preview. Synchronous on the main actor
+        // because the input is already capped at 4000px (ImageLoader
+        // cap). ~100ms on M-series, ~300ms on Intel. Acceptable for a
+        // one-shot recomputation triggered by parameter changes.
+        renderTargetAdjusted(rows: rows)
+    }
+
+    /// Re-render the "after" image from the current target with the
+    /// given delta rows applied. Cheap no-op if there's no target.
+    private func renderTargetAdjusted(rows: [CoachingDeltaRow]) {
+        guard let targetImage = targetDisplayImage else {
+            self.targetAdjusted = nil
+            return
+        }
+        // If the delta is all zero, no point rendering — just mirror
+        // the original. Saves the user a perceptible render pause on
+        // the first load when the model often returns small deltas.
+        let isIdentity = rows.allSatisfy { abs($0.value) < 0.01 }
+        if isIdentity {
+            self.targetAdjusted = targetImage
+            return
+        }
+        let preset = CPUDeltaRenderer.preset(from: rows)
+        self.targetAdjusted = CPUDeltaRenderer.renderToNSImage(targetImage, preset: preset)
     }
 
     // MARK: - File I/O
@@ -360,6 +397,7 @@ final class ColorwayParserModel: ObservableObject {
         self.targetURL = nil
         self.preset = nil
         self.coachingDeltaRows = []
+        self.targetAdjusted = nil
         self.presetName = ""
         self.lastError = nil
     }
