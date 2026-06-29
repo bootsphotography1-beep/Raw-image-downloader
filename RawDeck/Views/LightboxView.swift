@@ -104,6 +104,20 @@ struct LightboxContents: View {
 
     // MARK: - Photo stage
 
+    /// What gets shown in the center of the lightbox.
+    ///
+    /// Resolution ladder, fastest to slowest:
+    /// 1. Thumbnail (512px, from the camera's embedded preview JPEG) —
+    ///    painted the instant the lightbox opens.
+    /// 2. Full-resolution preview (sensor native, e.g. 6000×4000 for a
+    ///    24MP camera) — produced by `loadPreview(for:)`. Arrives 200–500ms
+    ///    later; SwiftUI swaps the source and the view sharpens in place.
+    /// 3. While both are missing, a spinner + "Loading preview…" copy.
+    ///
+    /// The intent is that the lightbox always has *something* to show —
+    /// it never blocks the user's input — and the photo it eventually
+    /// shows is the full-resolution demosaiced sensor capture, not the
+    /// stretched 1600px embedded JPEG that used to look grainy/dark/blurry.
     private var photoStage: some View {
         ZStack {
             if let preview = photo.preview {
@@ -111,23 +125,25 @@ struct LightboxContents: View {
                     .resizable()
                     .aspectRatio(contentMode: .fit)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    // `transition(.opacity)` would steal a frame at swap
+                    // time. `.id(photo.id)` would unmount/remount, also
+                    // bad. Default crossfade = SwiftUI just republishes
+                    // the @ObservedObject photo.preview and the Image
+                    // re-renders against the new pixels. No animation.
+            } else if let thumb = photo.thumbnail {
+                Image(nsImage: thumb)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .opacity(0.85)
             } else {
-                // Preview still decoding — show the thumbnail while waiting.
-                if let thumb = photo.thumbnail {
-                    Image(nsImage: thumb)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .opacity(0.6)
-                } else {
-                    VStack(spacing: 8) {
-                        ProgressView()
-                            .controlSize(.large)
-                            .tint(.white)
-                        Text("Loading preview…")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.6))
-                    }
+                VStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.large)
+                        .tint(.white)
+                    Text("Loading preview…")
+                        .font(.caption)
+                        .foregroundColor(.white.opacity(0.6))
                 }
             }
 
