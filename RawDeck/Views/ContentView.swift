@@ -15,6 +15,18 @@ struct ContentView: View {
     @EnvironmentObject var store: PhotoStore
 
     var body: some View {
+        // The per-cell `.onHover` already clears `hoveredPhotoID` when the
+        // cursor leaves the cell. When the cursor moves directly between
+        // two cells, the outgoing cell's `onHover(false)` and the incoming
+        // cell's `onHover(true)` fire in sequence; the guard
+        // `store.hoveredPhotoID == photo.id` in `ThumbnailCell` prevents
+        // the outgoing cell from clearing the value the incoming cell just
+        // set.
+
+        // One-shot alert — surfaced when store sets `alertMessage` (e.g.
+        // "Pixelmator Pro isn't installed"). Manual Binding because
+        // `@EnvironmentObject` doesn't expose `$store.alertMessage`
+        // directly the way `@State` would.
         ZStack {
             // Base layer: drop zone OR grid+toolbar.
             Group {
@@ -104,13 +116,14 @@ struct ContentView: View {
                 }
             }
         }
-        // The per-cell `.onHover` already clears `hoveredPhotoID` when the
-        // cursor leaves the cell. When the cursor moves directly between
-        // two cells, the outgoing cell's `onHover(false)` and the incoming
-        // cell's `onHover(true)` fire in sequence; the guard
-        // `store.hoveredPhotoID == photo.id` in `ThumbnailCell` prevents
-        // the outgoing cell from clearing the value the incoming cell just
-        // set.
+        .alert("RawDeck", isPresented: Binding(
+            get: { store.alertMessage != nil },
+            set: { newValue in if !newValue { store.alertMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(store.alertMessage ?? "")
+        }
     }
 }
 

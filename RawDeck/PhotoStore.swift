@@ -37,6 +37,11 @@ final class PhotoStore: ObservableObject {
     @Published var loadingProgress: (done: Int, total: Int) = (0, 0)
     @Published var lastError: String? = nil
 
+    /// One-shot alert message for the view layer to surface. Non-nil
+    /// means "show an alert with this message". The view sets it back
+    /// to nil on dismiss.
+    @Published var alertMessage: String? = nil
+
     /// When non-nil, the lightbox is open and showing this photo.
     /// The id is used (not the Photo directly) so views can resolve the
     /// live Photo instance from `photos` — preserving @ObservedObject updates.
@@ -449,14 +454,32 @@ final class PhotoStore: ObservableObject {
     // MARK: - External app
 
     /// Open selected photos (or a single photo) in Pixelmator Pro.
+    ///
+    /// If Pixelmator Pro isn't installed, sets `alertMessage` so the view
+    /// layer can show a user-facing alert (instead of silently falling back
+    /// to whatever the system default RAW handler is — which is often
+    /// Photoshop, causing the confusing "I clicked Open in Pixelmator and
+    /// it opened in Photoshop" UX).
     func openSelectionInPixelmator(photo: Photo? = nil) {
         let targets: [Photo] = {
             if let p = photo { return [p] }
             let sel = selectedPhotos
             return sel.isEmpty ? visiblePhotos : sel
         }()
+        guard !targets.isEmpty else { return }
+        var openedCount = 0
         for p in targets {
-            ExternalAppService.openInPixelmator(p.url)
+            if ExternalAppService.openInPixelmator(p.url) {
+                openedCount += 1
+            }
+        }
+        if openedCount == 0 {
+            // None of the opens succeeded — Pixelmator isn't installed.
+            // Surface a clear alert instead of silently opening the system
+            // default (which is what the previous version did, and it caused
+            // "I clicked Open in Pixelmator but it opened in Photoshop"
+            // confusion).
+            alertMessage = "Pixelmator Pro isn't installed on this Mac.\n\nInstall it from pixelmator.com to use this feature, or change the system default RAW handler in Finder's Get Info panel."
         }
     }
 
