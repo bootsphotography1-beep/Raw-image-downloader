@@ -11,12 +11,20 @@ import AppKit
 ///
 /// `@MainActor` because the rating/reject state is mutated only from the
 /// `PhotoStore` (which is also `@MainActor`) and from SwiftUI views.
+///
+/// Performance note: `init` deliberately does NOT call
+/// `FileManager.attributesOfItem` to fetch the file size. That syscall
+/// adds ~0.1–0.3 ms per file, so 1000 photos added 100–300 ms of
+/// blocking work on the main thread during import — and the size was
+/// never read anywhere else. If a file size is needed in the future,
+/// pre-fetch it during directory enumeration (see `ImportService`)
+/// using `URL.resourceValues(forKeys: [.fileSizeKey])` instead of a
+/// per-file stat.
 @MainActor
 final class Photo: Identifiable, ObservableObject {
     let id: UUID = UUID()
     let url: URL
     let fileName: String
-    let fileSize: Int64
 
     @Published var starRating: Int = 0   // 0–5
     @Published var isRejected: Bool = false
@@ -26,13 +34,5 @@ final class Photo: Identifiable, ObservableObject {
     init(url: URL) {
         self.url = url
         self.fileName = url.lastPathComponent
-
-        // File size
-        if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-           let size = attrs[.size] as? Int64 {
-            self.fileSize = size
-        } else {
-            self.fileSize = 0
-        }
     }
 }

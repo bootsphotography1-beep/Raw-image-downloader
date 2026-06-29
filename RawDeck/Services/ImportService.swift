@@ -15,13 +15,22 @@ import AppKit
 /// constructing one off-main would trip Swift's concurrency checker.
 /// The caller (`PhotoStore.importFolder`) hops back to the main actor
 /// after this returns and builds the `[Photo]` there.
+///
+/// Performance notes:
+/// - `FileManager.enumerator(at:)` is lazy and uses `readdir` under the
+///   hood, so recursive walks are fast (no `contentsOfDirectory` per
+///   subfolder).
+/// - `skipsHiddenFiles` handles `._foo` resource forks and `.DS_Store`
+///   without us needing to filter by prefix.
+/// - The `isLikelyRAW` Set lookup is O(1) per file. The `.lowercased()`
+///   on the extension allocates one short string per file — negligible.
 enum ImportService {
 
     static func importFolder(at folderURL: URL) -> [URL] {
         let fm = FileManager.default
         guard let enumerator = fm.enumerator(
             at: folderURL,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+            includingPropertiesForKeys: [.isRegularFileKey],
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
             return []
@@ -31,11 +40,6 @@ enum ImportService {
         for case let fileURL as URL in enumerator {
             // Skip non-RAWs (JPGs, JPEGs, PNGs etc. are not the target)
             guard ThumbnailService.isLikelyRAW(fileURL) else { continue }
-
-            // Skip macOS resource fork files (._IMG_0001.CR3)
-            let name = fileURL.lastPathComponent
-            if name.hasPrefix("._") { continue }
-
             urls.append(fileURL)
         }
 
