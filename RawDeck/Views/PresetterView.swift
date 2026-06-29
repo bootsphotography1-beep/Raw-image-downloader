@@ -53,7 +53,9 @@ struct PresetterView: View {
         }
                     .padding(40)
         // Drop target for image files. We accept any file that AppKit
-        // can read as an image (JPEG/PNG/HEIC/TIFF/etc).
+        // can read as an image (JPEG/PNG/HEIC/TIFF/etc). The closure must
+        // return a Bool — true signals "I accepted this drop" so other
+        // drop targets don't also try to handle it.
         .onDrop(of: [.image, .fileURL], isTargeted: nil) { providers in
             handleDrop(providers: providers)
         }
@@ -250,6 +252,11 @@ struct PresetterView: View {
     /// Resolve a list of `NSItemProvider` from a drop or paste into a
     /// single image URL, then load it. If multiple providers are given,
     /// we use the first image-bearing one.
+    ///
+    /// Marked `@discardableResult` because `.onDrop` and `.onPasteCommand`
+    /// closures inferred from a single-statement body discard the Bool,
+    /// triggering "Result of call is unused" warnings otherwise.
+    @discardableResult
     private func handleDrop(providers: [NSItemProvider]) -> Bool {
         guard let provider = providers.first else { return false }
 
@@ -265,13 +272,16 @@ struct PresetterView: View {
             return true
         }
 
-        // Try raw image data (paste from screenshot, drag from Photos).
+        // Try raw image data (paste from screenshot, drag from Photos/Safari).
+        // Use the Swift-native `loadObject` API which returns Progress and
+        // gives us a strongly-typed Any? that we cast to NSImage. The Obj-C
+        // bridge variant (`loadObject(ofClass:completionHandler:)`) trips
+        // a `_ObjectiveCBridgeable` warning on NSImage under Swift 6 mode.
         if provider.canLoadObject(ofClass: NSImage.self) {
-            _ = provider.loadObject(ofClass: NSImage.self) { image, _ in
-                if let image = image {
-                    Task { @MainActor in
+            _ = provider.loadObject(ofClass: NSImage.self) { object, _ in
+                guard let image = object as? NSImage else { return }
+                Task { @MainActor in
                     presetter.loadImage(from: image)
-                    }
                 }
             }
             return true
