@@ -53,23 +53,41 @@ enum ThumbnailService {
     /// 6000×4000 for a 24MP camera. The result is dramatically sharper
     /// than the camera's embedded 1600px baked-in JPEG.
     ///
+    /// **Sizing**: we resize the demosaic to `lightboxMaxDimension`
+    /// (default 2400px longest side) using the same CGContext pass that
+    /// applies EXIF orientation. The full sensor capture goes through
+    /// ImageIO's RAW decoder (so it's not the embedded JPEG), but the
+    /// result is sized appropriately for a 5K lightbox — about 3MB per
+    /// image, not 96MB. That's the difference between being able to
+    /// preview 5 photos before RAM fills vs. 30.
+    ///
+    /// **Orientation**: EXIF orientation is read and applied so
+    /// portrait photos render upright in the lightbox.
+    ///
     /// Cost: 200–500ms per photo on a recent Mac. Decoded off-main; the
     /// resulting CGImage is lazy (no bitmap allocation until painted),
     /// so RAM stays bounded.
-    static func generateFullPreview(for url: URL) -> NSImage? {
-        let options: [CFString: Any] = [
+    static func generateFullPreview(for url: URL, maxDimension: CGFloat = 2400) -> NSImage? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            // Not a RAW (or not an image ImageIO can decode natively) —
+            // fall back to the embedded thumbnail path.
+            return decode(url: url, maxDimension: maxDimension)
+        }
+        let fullOptions: [CFString: Any] = [
             kCGImageSourceShouldCacheImmediately: false,
             kCGImageSourceShouldAllowFloat: false,
         ]
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cg = CGImageSourceCreateImageAtIndex(src, 0, options as CFDictionary) else {
-            // Not a RAW (or not an image ImageIO can decode natively) —
-            // fall back to the embedded thumbnail at 2400px so non-RAW
-            // files (JPEG/HEIC/TIFF/PNG) still look good in the lightbox.
-            return decode(url: url, maxDimension: 2400)
+        guard let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) else {
+            return decode(url: url, maxDimension: maxDimension)
         }
-        let size = NSSize(width: cg.width, height: cg.height)
-        return NSImage(cgImage: cg, size: size)
+        // Read EXIF orientation and resize+rotate in one pass.
+        let orientation = exifOrientation(src: src)
+        if let oriented = resizeAndOrient(cg: cg, orientation: orientation, maxDimension: maxDimension) {
+            return NSImage(cgImage: oriented, size: NSSize(width: oriented.width, height: oriented.height))
+        }
+        // Fallback if the resize pipeline fails — at least return the
+        // raw CGImage so the user sees something.
+        return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
     }
 
     /// Shared decoder used by `generateThumbnail` and `generatePreview`.
@@ -88,14 +106,19 @@ enum ThumbnailService {
     /// NSImage, so portrait photos render upright. (The thumbnail
     /// path honors orientation via `WithTransform: true`.)
     private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
-        print("RawDeck: decode enter url=\(url.lastPathComponent) ext=\(url.pathExtension)")
-        print("RawDeck: decode calling CGImageSourceCreateWithURL for \(url.lastPathComponent)")
+        // macOS 27 / Xcode 26.5 quirk: for RAW files (CR3 especially),
+        // `CGImageSourceCreateThumbnailAtIndex` hangs indefinitely. We
+        // detect RAWs and go through the full-image path instead
+        // (`CGImageSourceCreateImageAtIndex` + manual resize + orientation
+        // fix). For non-RAWs, the thumbnail path is fine.
+        //
+        // EXIF orientation: for the RAW path we read the EXIF tag and
+        // apply the rotation/scale transform ourselves before wrapping in
+        // NSImage, so portrait photos render upright. (The thumbnail
+        // path honors orientation via `WithTransform: true`.)
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            print("RawDeck: CGImageSourceCreateWithURL returned nil for \(url.lastPathComponent)")
             return nil
         }
-        print("RawDeck: decode got image source for \(url.lastPathComponent)")
-
         if isLikelyRAW(url) {
             return decodeRAW(src: src, url: url, maxDimension: maxDimension)
         }
@@ -105,36 +128,26 @@ enum ThumbnailService {
     /// Decode a RAW file (CR3, NEF, ARW, etc.) using the full-image path
     /// then resize + apply EXIF orientation ourselves.
     private static func decodeRAW(src: CGImageSource, url: URL, maxDimension: CGFloat) -> NSImage? {
-        print("RawDeck: decode RAW branch for \(url.lastPathComponent)")
         let fullOptions: [CFString: Any] = [
             kCGImageSourceShouldCacheImmediately: false,
         ]
         guard let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) else {
-            print("RawDeck: decode full-image returned nil for \(url.lastPathComponent)")
             return nil
         }
-        print("RawDeck: decode full-image returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
-
         // Read EXIF orientation so we can rotate before wrapping.
         let orientation = exifOrientation(src: src)
-
         // Resize + orient into a single bitmap operation.
-        // Returns nil if anything fails; caller falls back to the
-        // full-size CGImage so the user always sees *something*.
         if let oriented = resizeAndOrient(cg: cg, orientation: orientation, maxDimension: maxDimension) {
-            print("RawDeck: decode resized+oriented to \(oriented.width)x\(oriented.height) for \(url.lastPathComponent)")
             return NSImage(cgImage: oriented, size: NSSize(width: oriented.width, height: oriented.height))
         }
-        // Fallback: just return the raw CGImage with no orientation
-        // fix (will show rotated for portraits, but better than blank).
-        print("RawDeck: decode resize+orient failed, returning raw CGImage for \(url.lastPathComponent)")
+        // Fallback: return raw CGImage with no orientation fix (portraits
+        // will show rotated, but better than blank).
         return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
     }
 
     /// Decode a non-RAW file (JPEG, HEIC, PNG, TIFF) using the fast
     /// thumbnail path. Honors EXIF orientation via WithTransform.
     private static func decodeNonRAW(src: CGImageSource, url: URL, maxDimension: CGFloat) -> NSImage? {
-        print("RawDeck: decode non-RAW branch for \(url.lastPathComponent)")
         let thumbnailOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: false,
@@ -142,10 +155,8 @@ enum ThumbnailService {
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
         ]
         guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbnailOptions as CFDictionary) else {
-            print("RawDeck: decode thumbnail returned nil for \(url.lastPathComponent)")
             return nil
         }
-        print("RawDeck: decode thumbnail returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
         return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
     }
 
