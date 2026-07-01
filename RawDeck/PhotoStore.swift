@@ -626,18 +626,30 @@ final class PhotoStore: ObservableObject {
                 }
                 return
             }
-            var copied = 0
-            var failed = 0
-            var firstError: String? = nil
+            // Use a small reference type so the per-iteration mutation is
+            // explicit. Swift 6's strict concurrency checker rejects
+            // capturing `var` locals into a @Sendable closure (the inner
+            // MainActor.run blocks read these), so we either:
+            //   (a) collect into a local class instance, or
+            //   (b) read them into immutable `let` constants right before
+            //       the MainActor.run hop.
+            // We use (a) for the counters (incremented in a loop) and (b)
+            // for the final summary hop (where we just snapshot).
+            final class Counter {
+                var copied = 0
+                var failed = 0
+                var firstError: String? = nil
+            }
+            let counter = Counter()
             for (idx, src) in urls.enumerated() {
                 let dst = ExportService.uniqueDestination(for: src, in: dest)
                 do {
                     try fm.copyItem(at: src, to: dst)
-                    copied += 1
+                    counter.copied += 1
                 } catch {
-                    failed += 1
-                    if firstError == nil {
-                        firstError = "\(src.lastPathComponent): \(error.localizedDescription)"
+                    counter.failed += 1
+                    if counter.firstError == nil {
+                        counter.firstError = "\(src.lastPathComponent): \(error.localizedDescription)"
                     }
                     NSLog("RawDeck: export failed for \(src.lastPathComponent): \(error)")
                 }
@@ -650,6 +662,12 @@ final class PhotoStore: ObservableObject {
                     }
                 }
             }
+            // Snapshot into immutable lets before the hop. Counter is a
+            // class so it can be Sendable when all its stored properties
+            // are Sendable (Int and Optional<String> are).
+            let copied = counter.copied
+            let failed = counter.failed
+            let firstError = counter.firstError
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.exportProgress = nil
