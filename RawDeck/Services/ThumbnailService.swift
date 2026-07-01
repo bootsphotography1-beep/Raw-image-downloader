@@ -51,15 +51,27 @@ enum ThumbnailService {
         return generateThumbnail(for: url, maxDimension: maxDimension)
     }
 
-    /// Async full-resolution preview for the lightbox. Uses Quick Look at
-    /// its largest available scale, which for CR3 is the demosaiced
-    /// sensor capture (much sharper than the embedded JPEG thumbnail).
+    /// Async full-resolution preview for the lightbox. Uses Quick Look's
+    /// `.all` representation type which returns the highest-quality
+    /// representation Finder can produce — for CR3, that's the
+    /// demosaiced sensor capture at the requested scale (much sharper
+    /// than the embedded JPEG thumbnail).
     ///
-    /// Cost: 200-500ms per photo on a recent Mac. Falls back to a 1600px
-    /// thumbnail if the full-res isn't available.
-    static func generateFullPreview(for url: URL, maxDimension: CGFloat = 1600) async -> NSImage? {
+    /// Default size is 2400px @ 2x = up to 4800px bitmap, which is
+    /// enough for a Retina 5K lightbox. Cost: ~300-800ms per photo on
+    /// a recent Mac. The result is delivered via the async function
+    /// and assigned to `photo.preview`.
+    ///
+    /// NOTE on "original quality": QL returns whatever the system RAW
+    /// codec produces for that file at the requested size — it does NOT
+    /// return the unmodified sensor pixels. To see truly lossless RAW
+    /// pixels, the user needs an external app like Pixelmator Pro or
+    /// Darktable (which is why the "Open in Pixelmator" double-click
+    /// shortcut exists). This is the sharpest QL can give us at this
+    /// size.
+    static func generateFullPreview(for url: URL, maxDimension: CGFloat = 2400) async -> NSImage? {
         return await withCheckedContinuation { continuation in
-            generateThumbnailAsync(url: url, maxDimension: maxDimension) { img in
+            generateThumbnailAsync(url: url, maxDimension: maxDimension, quality: .fullSize) { img in
                 continuation.resume(returning: img)
             }
         }
@@ -70,17 +82,37 @@ enum ThumbnailService {
     ///
     /// Uses `QLThumbnailGenerator` which is Finder's preview engine. It
     /// correctly handles CR3 on macOS 27 where CGImageSource hangs.
+    ///
+    /// `quality` controls which representation type QL returns:
+    /// - `.thumbnail` (default for grid cells): Finder-icon-sized preview,
+    ///   ~256-512px, fast.
+    /// - `.fullSize` (for lightbox): the highest-quality representation
+    ///   Finder can produce for the file — for CR3, that's the demosaiced
+    ///   sensor capture at the requested size. ~200-500ms per file.
+    enum Quality {
+        case thumbnail
+        case fullSize
+    }
+
     private static func generateThumbnailAsync(
         url: URL,
         maxDimension: CGFloat,
+        quality: Quality = .thumbnail,
         handler: @escaping (NSImage?) -> Void
     ) {
         let scale = NSScreen.main?.backingScaleFactor ?? 2.0
+        // For full-size requests, scale UP so a Retina display gets
+        // pixel-perfect rendering. 3.0 = up to 3x the requested pixel
+        // dimension (e.g. 1600px request → up to 4800px bitmap for
+        // retina + zoom).
+        let effectiveScale = (quality == .fullSize) ? max(scale, 2.0) : scale
+        let representationType: QLThumbnailGenerator.Request.RepresentationTypes =
+            (quality == .fullSize) ? .all : .thumbnail
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
             size: CGSize(width: maxDimension, height: maxDimension),
-            scale: scale,
-            representationTypes: .thumbnail
+            scale: effectiveScale,
+            representationTypes: representationType
         )
         QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
             DispatchQueue.main.async {
