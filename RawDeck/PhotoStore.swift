@@ -187,12 +187,24 @@ final class PhotoStore: ObservableObject {
     ///   Result: every decode slowed down, RAM pressure spiked, and the
     ///   lightbox (if the user hit Space mid-import) would jump in and
     ///   slam the system further.
-    /// - Fix: bound parallelism to `ProcessInfo.activeProcessorCount` —
-    ///   one RAW decode per physical core. Decodes pipeline into the
-    ///   pool; the rest queue behind a DispatchSemaphore. End result is
-    ///   roughly 2–4× faster wall-clock import on an 8-core machine
-    ///   (you waste less time context-switching) and the lightbox stays
-    ///   responsive.
+    ///
+    /// - We bound parallelism to `ProcessInfo.activeProcessorCount` using
+    ///   `withTaskGroup`. The group keeps at most N child tasks in flight;
+    ///   we add one and `await` the group's next completion before adding
+    ///   the next. This is true async backpressure — the calling Task on
+    ///   `MainActor` SUSPENDS (not blocks) while the group is at capacity,
+    ///   so SwiftUI keeps rendering, the window stays draggable, and
+    ///   there's no "Application Not Responding" beachball.
+    ///
+    /// Why this matters: an earlier version used `DispatchSemaphore` to
+    /// bound parallelism. `sem.wait()` inside a Task running on
+    /// `MainActor` BLOCKS the main thread (the semaphore is a low-level
+    /// primitive, not async-aware). For an import of hundreds of RAWs
+    /// each taking ~100ms to decode, that meant the UI was frozen in
+    /// 100ms slices across the whole import — macOS would surface
+    /// "Application Not Responding" and force-quitting looked like a
+    /// crash. `withTaskGroup` doesn't have this problem.
+    ///
     /// - `kCGImageSourceShouldCacheImmediately: false` (set in
     ///   ThumbnailService) means ImageIO defers bitmap allocation to
     ///   draw time, so we don't double the RAM cost by eagerly
@@ -207,35 +219,71 @@ final class PhotoStore: ObservableObject {
         for p in toLoad { thumbnailInFlight.insert(p.id) }
 
         let maxParallel = max(2, ProcessInfo.processInfo.activeProcessorCount)
-        let sem = DispatchSemaphore(value: maxParallel)
 
+        // NOTE: this outer Task runs on @MainActor (inherited from the
+        // method's actor). The semaphore version used to block MainActor
+        // while waiting for a decode slot. With withTaskGroup, the
+        // `await group.next()` suspension yields MainActor back to
+        // SwiftUI, so the UI stays responsive even during a multi-
+        // thousand-photo import.
         Task { [weak self] in
-            for photo in toLoad {
-                if Task.isCancelled { break }
-                let id = photo.id
-                let url = photo.url
-                // Acquire a slot. `sem.wait()` is fine inside a Task because
-                // it suspends the task on a continuation, not blocks a thread.
-                sem.wait()
-                Task.detached(priority: .userInitiated) { [weak self] in
-                    let wrapped = SendableImage(
-                        image: ThumbnailService.generateThumbnail(for: url) ?? NSImage()
-                    )
-                    // Always release the slot, even if self vanished mid-decode
-                    // (e.g. the user closed the window during import). Putting
-                    // the signal here on the worker thread, before the main-actor
-                    // hop, means a deallocated store can't deadlock the importer.
-                    sem.signal()
-                    _ = await MainActor.run { [weak self] in
-                        guard let self = self else { return }
-                        self.thumbnailInFlight.remove(id)
-                        let thumb = wrapped.image
-                        if thumb.size.width > 0,
-                           let p = self.photos.first(where: { $0.id == id }) {
-                            p.thumbnail = thumb
-                        }
+            await withTaskGroup(of: Void.self) { group in
+                var inFlight = 0
+                var index = 0
+
+                // Prime the pump: kick off `maxParallel` decodes.
+                while inFlight < maxParallel, index < toLoad.count {
+                    let photo = toLoad[index]
+                    index += 1
+                    inFlight += 1
+                    group.addTask(priority: .userInitiated) { [weak self] in
+                        await Self.decodeOneThumbnail(photo: photo, owner: self)
                     }
                 }
+
+                // As each one finishes, pull the next from the queue.
+                // `await group.next()` suspends — it does NOT block
+                // MainActor. SwiftUI keeps rendering while we wait.
+                while await group.next() != nil {
+                    inFlight -= 1
+                    if index < toLoad.count {
+                        let photo = toLoad[index]
+                        index += 1
+                        inFlight += 1
+                        group.addTask(priority: .userInitiated) { [weak self] in
+                            await Self.decodeOneThumbnail(photo: photo, owner: self)
+                        }
+                    }
+                    // If `inFlight` is 0 here, the loop exits because
+                    // `group.next()` returns nil (all children done).
+                    _ = inFlight
+                }
+            }
+        }
+    }
+
+    /// Decode one thumbnail off-main and hand the result back to the
+    /// store on the main actor. Static so we don't capture `self` in
+    /// the child Task — that lets the closure be `@Sendable` cleanly
+    /// and avoids any retain-cycle surprises.
+    private static func decodeOneThumbnail(photo: Photo, owner: PhotoStore?) async {
+        let id = photo.id
+        let url = photo.url
+        let wrapped = await Task.detached(priority: .userInitiated) {
+            SendableImage(
+                image: ThumbnailService.generateThumbnail(for: url) ?? NSImage()
+            )
+        }.value
+        await MainActor.run { [weak owner] in
+            guard let owner = owner else { return }
+            owner.thumbnailInFlight.remove(id)
+            let thumb = wrapped.image
+            // Only assign if the photo is still in the store — the user
+            // might have started a new import or closed the lightbox
+            // mid-decode.
+            if thumb.size.width > 0,
+               let p = owner.photos.first(where: { $0.id == id }) {
+                p.thumbnail = thumb
             }
         }
     }
