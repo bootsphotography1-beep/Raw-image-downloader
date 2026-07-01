@@ -39,8 +39,8 @@ struct RawDeckApp: App {
             }
 
             // Custom "Photo" menu — Library-mode actions (Pixelmator,
-            // Reveal, Select All, Trash). Disabled in Colorway Parser mode
-            // because they don't apply to a single reference image.
+            // Reveal, Export, Select All, Trash). Disabled in Colorway
+            // Parser mode because they don't apply to a single reference image.
             CommandMenu("Photo") {
                 Button("Open in Pixelmator Pro") {
                     store.openSelectionInPixelmator()
@@ -53,6 +53,8 @@ struct RawDeckApp: App {
                 }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(store.mode != .library || store.photos.isEmpty)
+
+                ExportCommand()
 
                 Divider()
 
@@ -102,6 +104,28 @@ struct RawDeckApp: App {
                 .disabled(store.mode != .colorwayParser || colorwayParser.displayImage == nil)
             }
         }
+    }
+}
+
+/// Batch export selected photos as their ORIGINAL files (.cr3, .nef,
+/// .arw, .dng, etc.) into a user-chosen destination folder. Shows a
+/// folder picker, runs the copies off-main, and reports a summary in
+/// an alert. See `PhotoStore.exportSelection` for the selection rules
+/// (selected photos, or all visible photos if nothing is selected).
+///
+/// Declared at file scope (outside `RawDeckApp`) so it can be
+/// referenced as a menu item inside the `.commands { CommandMenu }`
+/// builder — Commands syntax doesn't accept inline `Button` declarations
+/// with arbitrary modifiers, but it happily accepts a nested View.
+struct ExportCommand: View {
+    @EnvironmentObject var store: PhotoStore
+    var body: some View {
+        Button("Export Selected as Originals…") {
+            store.exportSelection()
+        }
+        .keyboardShortcut("e", modifiers: [.command, .option])
+        .disabled(store.mode != .library || store.photos.isEmpty)
+        .help("Copy selected photos to a folder of your choice, preserving the original .cr3 / .nef / .arw / .dng bytes (no re-encoding)")
     }
 }
 

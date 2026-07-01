@@ -120,6 +120,14 @@ struct ToolbarView: View {
             .disabled(store.photos.isEmpty)
             .help("Reveal selected photos in Finder")
 
+            Button {
+                store.exportSelection()
+            } label: {
+                Label("Export", systemImage: "square.and.arrow.up")
+            }
+            .disabled(store.photos.isEmpty)
+            .help("Copy selected photos to a folder of your choice, preserving the original .cr3 / .nef / .arw / .dng bytes (no re-encoding)")
+
             Button(role: .destructive) {
                 _ = store.trashSelection()
             } label: {

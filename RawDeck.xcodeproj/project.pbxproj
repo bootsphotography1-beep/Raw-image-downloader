@@ -31,6 +31,7 @@
 		A1000022 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000022 /* DesignSystem.swift */; };
 			A1000023 /* CoachingDelta.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000023 /* CoachingDelta.swift */; };
 			A1000024 /* CPUDeltaRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000024 /* CPUDeltaRenderer.swift */; };
+		A1000025 /* ExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000025 /* ExportService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -57,8 +58,9 @@
 		B1000021 /* ColorwayParserView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ColorwayParserView.swift; sourceTree = "<group>"; };
 		B1000022 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
 			B1000023 /* CoachingDelta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingDelta.swift; sourceTree = "<group>"; };
-			B1000024 /* CPUDeltaRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CPUDeltaRenderer.swift; sourceTree = "<group>"; };
-			B2000001 /* RawDeck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RawDeck.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1000024 /* CPUDeltaRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CPUDeltaRenderer.swift; sourceTree = "<group>"; };
+		B1000025 /* ExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportService.swift; sourceTree = "<group>"; };
+		B2000001 /* RawDeck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RawDeck.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -127,15 +129,16 @@
 			sourceTree = "<group>";
 		};
 		D1000006 /* Services */ = {
-			isa = PBXGroup;
-			children = (
-				B1000009 /* ThumbnailService.swift */,
-				B1000010 /* ImportService.swift */,
-				B1000011 /* ExternalAppService.swift */,
-			);
-			path = Services;
-			sourceTree = "<group>";
-		};
+		isa = PBXGroup;
+		children = (
+			B1000009 /* ThumbnailService.swift */,
+			B1000010 /* ImportService.swift */,
+			B1000011 /* ExternalAppService.swift */,
+			B1000025 /* ExportService.swift */,
+		);
+		path = Services;
+		sourceTree = "<group>";
+	};
 
 		D1000007 /* ColorwayParser */ = {
 			isa = PBXGroup;
@@ -252,6 +255,7 @@
 				A1000022 /* DesignSystem.swift in Sources */,
 					A1000023 /* CoachingDelta.swift in Sources */,
 				A1000024 /* CPUDeltaRenderer.swift in Sources */,
+				A1000025 /* ExportService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

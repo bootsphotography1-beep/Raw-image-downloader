@@ -202,6 +202,13 @@ struct StatusBarView: View {
             Text("Importing…")
                 .font(RDType.caption)
                 .foregroundStyle(RDColor.textSecondary)
+        } else if let prog = store.exportProgress {
+            ProgressView()
+                .controlSize(.small)
+                .tint(RDColor.accentPrimary)
+            Text("Exporting \(prog.done) / \(prog.total)…")
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
         } else {
             Text("\(store.photos.count) photos")
                 .font(RDType.caption)

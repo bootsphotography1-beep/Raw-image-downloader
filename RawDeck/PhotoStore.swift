@@ -570,6 +570,102 @@ final class PhotoStore: ObservableObject {
             ExternalAppService.revealInFinder(p.url)
         }
     }
+
+    // MARK: - Export
+
+    /// Track the most recent export operation's progress so the status
+    /// bar can show it. Resets to nil when the export finishes.
+    @Published var exportProgress: (done: Int, total: Int)? = nil
+
+    /// Batch-export selected photos as their ORIGINAL files (no
+    /// re-encoding) into a user-chosen destination folder. Shows an
+    /// NSOpenPanel directory picker, then runs the copies off-main
+    /// and reports a summary.
+    ///
+    /// Selection model:
+    /// - If the user has any photos selected, those are exported.
+    /// - If nothing is selected, all VISIBLE photos are exported
+    ///   (i.e., after rating filter). This matches the behaviour of
+    ///   "Open in Pixelmator" / "Reveal in Finder" elsewhere.
+    /// - If there are no visible photos at all, the operation no-ops
+    ///   and shows an alert.
+    func exportSelection() {
+        let targets: [Photo] = {
+            let sel = selectedPhotos
+            return sel.isEmpty ? visiblePhotos : sel
+        }()
+        guard !targets.isEmpty else {
+            self.alertMessage = "Nothing to export. Import a folder or select some photos first."
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "Choose destination folder"
+        panel.prompt = "Export"
+        panel.message = "RawDeck will copy the originals (.cr3, .nef, .arw, etc.) into the folder you pick. Existing files with the same name get a -1, -2, … suffix."
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+
+        let urls = targets.map { $0.url }
+        let total = urls.count
+        exportProgress = (0, total)
+
+        // Copy off-main so a 1000-photo export doesn't block the UI.
+        // (File copy is a synchronous sys call.) We hop back to the main
+        // actor to publish progress and the final result.
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let fm = FileManager.default
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: dest.path, isDirectory: &isDir),
+                  isDir.boolValue else {
+                await MainActor.run { [weak self] in
+                    self?.exportProgress = nil
+                    self?.alertMessage = "Destination is not a folder."
+                }
+                return
+            }
+            var copied = 0
+            var failed = 0
+            var firstError: String? = nil
+            for (idx, src) in urls.enumerated() {
+                let dst = ExportService.uniqueDestination(for: src, in: dest)
+                do {
+                    try fm.copyItem(at: src, to: dst)
+                    copied += 1
+                } catch {
+                    failed += 1
+                    if firstError == nil {
+                        firstError = "\(src.lastPathComponent): \(error.localizedDescription)"
+                    }
+                    NSLog("RawDeck: export failed for \(src.lastPathComponent): \(error)")
+                }
+                // Publish progress every 10 photos so we don't spam
+                // MainActor publishes for thousand-photo exports.
+                let done = idx + 1
+                if done % 10 == 0 || done == total {
+                    await MainActor.run { [weak self] in
+                        self?.exportProgress = (done, total)
+                    }
+                }
+            }
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.exportProgress = nil
+                var lines: [String] = []
+                let plural = total == 1 ? "" : "s"
+                lines.append("Exported \(copied) of \(total) photo\(plural) to \(dest.lastPathComponent)/")
+                if failed > 0 {
+                    lines.append("\(failed) failed.")
+                    if let err = firstError {
+                        lines.append("First error: \(err)")
+                    }
+                }
+                self.alertMessage = lines.joined(separator: "\n")
+            }
+        }
+    }
 }
 
 // MARK: - SortMode

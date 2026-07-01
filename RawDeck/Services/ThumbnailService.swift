@@ -77,23 +77,43 @@ enum ThumbnailService {
     /// camera's embedded JPEG preview (or the JPEG's own pixels for
     /// non-RAW files). Fast but low-resolution.
     ///
-    /// `shouldCacheImmediately: false` defers inflation to first draw,
-    /// which lets the importer stay snappy even with hundreds of decodes
-    /// in flight.
+    /// `shouldCacheImmediately: true` makes ImageIO materialise the
+    /// bitmap up-front. The lazy variant (`false`) causes ImageIO to
+    /// return nil for some RAW formats — particularly CR3 on certain
+    /// macOS versions — even when the embedded preview is fine. The
+    /// cost of eager caching is one extra bitmap allocation per file
+    /// (here, ~1MB for a 512px thumbnail); the benefit is that
+    /// `CGImageSourceCreateThumbnailAtIndex` actually returns a
+    /// CGImage we can wrap in an NSImage and hand to SwiftUI.
     private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
-            kCGImageSourceShouldCacheImmediately: false,
+            kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
         ]
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) else {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            NSLog("RawDeck: CGImageSourceCreateWithURL failed for \(url.lastPathComponent)")
             return nil
         }
-        let size = NSSize(width: cg.width, height: cg.height)
-        return NSImage(cgImage: cg, size: size)
+        if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) {
+            let size = NSSize(width: cg.width, height: cg.height)
+            return NSImage(cgImage: cg, size: size)
+        }
+        // Fallback path: some RAW files (occasionally CR3 with unusual
+        // orientations, and a few other edge cases) fail to produce a
+        // thumbnail from the embedded preview. Fall back to creating
+        // the full image at index 0, which triggers ImageIO's full
+        // decoder and works for everything ImageIO knows about.
+        NSLog("RawDeck: thumbnail decode failed for \(url.lastPathComponent), trying full-image fallback")
+        if let cg = CGImageSourceCreateImageAtIndex(src, 0, options as CFDictionary) {
+            let size = NSSize(width: cg.width, height: cg.height)
+            return NSImage(cgImage: cg, size: size)
+        }
+        NSLog("RawDeck: both thumbnail and full-image decode failed for \(url.lastPathComponent)")
+        return nil
     }
+
 
     /// Heuristic: is this file a RAW image that macOS can decode?
     /// Checks the file extension against a list of common RAW formats.
