@@ -287,6 +287,7 @@ final class PhotoStore: ObservableObject {
         let id = photo.id
         let url = photo.url
         let wrapped = await Task.detached(priority: .userInitiated) {
+            // Returns NSImage? — may be nil for unsupported formats.
             SendableImage(image: ThumbnailService.generateThumbnail(for: url) ?? NSImage())
         }.value
         await MainActor.run { [weak owner] in
@@ -337,19 +338,18 @@ final class PhotoStore: ObservableObject {
         let id = photo.id
         let url = photo.url
         let task = Task { [weak self] in
-            let wrapped = await Task.detached(priority: .userInitiated) {
-                SendableImage(image: ThumbnailService.generateFullPreview(for: url) ?? NSImage())
-            }.value
+            // Quick Look is async — yields control to MainActor while
+            // waiting for the XPC callback. Other code can run.
+            let img: NSImage? = await ThumbnailService.generateFullPreview(for: url)
             // If the user has navigated away, don't bother assigning —
             // a newer decode is already in flight or done.
             if Task.isCancelled { return }
             _ = await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.previewInFlight.remove(id)
-                let preview = wrapped.image
-                if preview.size.width > 0,
+                if let img = img,
                    let p = self.photos.first(where: { $0.id == id }) {
-                    p.preview = preview
+                    p.preview = img
                 }
             }
         }
