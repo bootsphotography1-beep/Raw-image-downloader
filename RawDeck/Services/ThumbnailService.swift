@@ -51,16 +51,23 @@ enum ThumbnailService {
         return generateThumbnail(for: url, maxDimension: maxDimension)
     }
 
-    /// Async full-resolution preview for the lightbox. Uses Quick Look's
-    /// `.all` representation type which returns the highest-quality
-    /// representation Finder can produce — for CR3, that's the
-    /// demosaiced sensor capture at the requested scale (much sharper
-    /// than the embedded JPEG thumbnail).
+    /// Async full-resolution preview for the lightbox.
     ///
-    /// Default size is 2400px @ 2x = up to 4800px bitmap, which is
-    /// enough for a Retina 5K lightbox. Cost: ~300-800ms per photo on
-    /// a recent Mac. The result is delivered via the async function
-    /// and assigned to `photo.preview`.
+    /// Uses `QLThumbnailGenerator` with the `.thumbnail` representation
+    /// type, but requests a much larger size than the grid cells
+    /// (2400px vs 512px). QL's `.thumbnail` scales the preview bitmap
+    /// to whatever dimension you request, so a 2400px request yields a
+    /// 2400px-long-side image — sharp on a 5K display.
+    ///
+    /// **Why not `.all`?** We tried `representationTypes: .all` (QL's
+    /// "highest quality" option) — it returns the file's *icon*
+    /// (the curled-paper graphic) for CR3/RAW instead of decoded image
+    /// content, because `.all` is meant for documents (PDFs, Keynote
+    /// files) where the file IS the document, not for media files.
+    /// `.thumbnail` correctly decodes RAW preview data at any size.
+    ///
+    /// Cost: ~300-800ms per photo on a recent Mac. The result is
+    /// delivered via the async function and assigned to `photo.preview`.
     ///
     /// NOTE on "original quality": QL returns whatever the system RAW
     /// codec produces for that file at the requested size — it does NOT
@@ -83,12 +90,17 @@ enum ThumbnailService {
     /// Uses `QLThumbnailGenerator` which is Finder's preview engine. It
     /// correctly handles CR3 on macOS 27 where CGImageSource hangs.
     ///
-    /// `quality` controls which representation type QL returns:
-    /// - `.thumbnail` (default for grid cells): Finder-icon-sized preview,
-    ///   ~256-512px, fast.
-    /// - `.fullSize` (for lightbox): the highest-quality representation
-    ///   Finder can produce for the file — for CR3, that's the demosaiced
-    ///   sensor capture at the requested size. ~200-500ms per file.
+    /// `quality` controls what we ask QL for:
+    /// - `.thumbnail` (default for grid cells): small request, fast.
+    /// - `.fullSize` (for lightbox): larger request — QL scales the
+    ///   decoded preview bitmap to whatever size we ask, so we get
+    ///   pixel-sharp rendering on Retina without paying for full
+    ///   sensor demosaic.
+    ///
+    /// Both qualities use QL's `.thumbnail` representation type because
+    /// `.all` returns the file icon for RAW files (the curled-paper
+    /// graphic) instead of decoded image content — see the comment on
+    /// `generateFullPreview` for details.
     enum Quality {
         case thumbnail
         case fullSize
@@ -102,17 +114,15 @@ enum ThumbnailService {
     ) {
         let scale = NSScreen.main?.backingScaleFactor ?? 2.0
         // For full-size requests, scale UP so a Retina display gets
-        // pixel-perfect rendering. 3.0 = up to 3x the requested pixel
-        // dimension (e.g. 1600px request → up to 4800px bitmap for
-        // retina + zoom).
+        // pixel-perfect rendering. 2.0 = up to 2x the requested pixel
+        // dimension (e.g. 2400px request → up to 4800px bitmap for
+        // retina).
         let effectiveScale = (quality == .fullSize) ? max(scale, 2.0) : scale
-        let representationType: QLThumbnailGenerator.Request.RepresentationTypes =
-            (quality == .fullSize) ? .all : .thumbnail
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
             size: CGSize(width: maxDimension, height: maxDimension),
             scale: effectiveScale,
-            representationTypes: representationType
+            representationTypes: .thumbnail
         )
         QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
             DispatchQueue.main.async {
