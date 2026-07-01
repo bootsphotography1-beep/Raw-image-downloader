@@ -283,19 +283,11 @@ final class PhotoStore: ObservableObject {
             print("RawDeck: generateThumbnail returned \(img == nil ? "nil" : "\(Int(img!.size.width))x\(Int(img!.size.height))") for \(url.lastPathComponent)")
             return SendableImage(image: img ?? NSImage())
         }.value
+        print("RawDeck: decodeOneThumbnail Task.detached returned for \(url.lastPathComponent)")
         await MainActor.run { [weak owner] in
             guard let owner = owner else { return }
             owner.thumbnailInFlight.remove(id)
             let thumb = wrapped.image
-            // Assign the thumbnail even if size.width is 0 — SwiftUI's
-            // `Image` will paint whatever it gets (empty CGImage → blank
-            // cell, but the "Loading…" spinner goes away and the user
-            // sees the truth instead of an indefinite spinner). The
-            // earlier `size.width > 0` guard meant that any decode
-            // failure — CR3 with corrupt embedded preview, weird
-            // orientation, etc. — left every cell stuck on "Loading…"
-            // forever. NSLog if it's a true failure so we can see it in
-            // Console.app.
             if thumb.size.width == 0 {
                 print("RawDeck: thumbnail decode produced 0×0 image for \(url.lastPathComponent)")
             }

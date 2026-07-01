@@ -103,7 +103,7 @@ enum ThumbnailService {
 
         if isLikelyRAW(url) {
             print("RawDeck: decode RAW branch for \(url.lastPathComponent) — skipping thumbnail path")
-            // RAW: get the full decoded image and downscale manually.
+            // RAW: get the full decoded image.
             // shouldCacheImmediately: false to avoid any eager-cache hangs.
             let fullOptions: [CFString: Any] = [
                 kCGImageSourceShouldCacheImmediately: false,
@@ -111,7 +111,16 @@ enum ThumbnailService {
             print("RawDeck: decode calling CGImageSourceCreateImageAtIndex for \(url.lastPathComponent)")
             if let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) {
                 print("RawDeck: decode full-image returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
-                return scaledNSImage(from: cg, maxDimension: maxDimension)
+                // Skip the manual downscale (it was hanging on macOS 27).
+                // Hand SwiftUI the full CGImage and let Image(nsImage:)
+                // scale it on the GPU during paint — slightly more work
+                // per paint but reliable. The grid cell's
+                // .resizable().aspectRatio(contentMode: .fit) handles
+                // the scaling at draw time.
+                let size = NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height))
+                let img = NSImage(cgImage: cg, size: size)
+                print("RawDeck: decode wrapped full-image as NSImage for \(url.lastPathComponent)")
+                return img
             }
             print("RawDeck: decode full-image returned nil for \(url.lastPathComponent)")
             return nil
