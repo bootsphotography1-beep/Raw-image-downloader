@@ -116,6 +116,19 @@ final class ColorwayParserModel: ObservableObject {
     // MARK: - Loading — Reference
 
     func openReferenceViaPanel() {
+        // Defer the panel init to the next main-loop tick. On first launch
+        // (or when invoked from a SwiftUI shortcut before AppKit has
+        // finished initialising its panel machinery), creating an
+        // NSOpenPanel synchronously can hit an internal "configuration
+        // phase semaphore timed out" assertion in NSSavePanel._initBridgeAndStuff.
+        // Hopping to the next runloop tick gives AppKit a chance to finish
+        // whatever async init it's doing before we ask for a panel.
+        DispatchQueue.main.async { [weak self] in
+            self?.presentReferenceOpenPanel()
+        }
+    }
+
+    private func presentReferenceOpenPanel() {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
         panel.canChooseDirectories = false

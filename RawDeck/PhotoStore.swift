@@ -292,6 +292,9 @@ final class PhotoStore: ObservableObject {
             }
             if let p = owner.photos.first(where: { $0.id == id }) {
                 p.thumbnail = thumb
+                NSLog("RawDeck: assigned thumbnail for \(url.lastPathComponent) size=\(Int(thumb.size.width))x\(Int(thumb.size.height))")
+            } else {
+                NSLog("RawDeck: photo \(url.lastPathComponent) no longer in store at assignment time")
             }
         }
     }
