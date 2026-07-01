@@ -80,6 +80,13 @@ final class PhotoStore: ObservableObject {
     /// dedupe pattern as `thumbnailInFlight` for the lightbox.
     private var previewInFlight: Set<UUID> = []
 
+    /// The currently-running lightbox preview decode. When the user
+    /// navigates with arrow keys, we cancel this so the user doesn't
+    /// wait on a stale decode for a photo they no longer care about.
+    /// Without cancellation, rapid arrow-key presses queue up N decodes
+    /// and the user pays for ALL of them before the next photo renders.
+    private var currentPreviewTask: Task<Void, Never>?
+
     // MARK: - Derived state
 
     /// The photos to show in the grid, after applying `ratingFilter`,
@@ -143,6 +150,7 @@ final class PhotoStore: ObservableObject {
     /// never read anywhere. See `Photo.swift` for the rationale.
     func importFolder(_ url: URL) {
         importTask?.cancel()
+        currentPreviewTask?.cancel()
         currentFolder = url
         isLoading = true
         loadingProgress = (0, 0)
@@ -328,10 +336,13 @@ final class PhotoStore: ObservableObject {
         previewInFlight.insert(photo.id)
         let id = photo.id
         let url = photo.url
-        Task { [weak self] in
+        let task = Task { [weak self] in
             let wrapped = await Task.detached(priority: .userInitiated) {
                 SendableImage(image: ThumbnailService.generateFullPreview(for: url) ?? NSImage())
             }.value
+            // If the user has navigated away, don't bother assigning —
+            // a newer decode is already in flight or done.
+            if Task.isCancelled { return }
             _ = await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.previewInFlight.remove(id)
@@ -342,6 +353,7 @@ final class PhotoStore: ObservableObject {
                 }
             }
         }
+        currentPreviewTask = task
     }
 
     // MARK: - Selection
@@ -394,6 +406,9 @@ final class PhotoStore: ObservableObject {
     /// Navigation in the lightbox uses `visiblePhotos` so the filter applies:
     /// if you've filtered to ★4+, the arrows skip the hidden photos.
     func openLightbox(on photo: Photo) {
+        // Cancel any in-flight preview decode — the user is opening a
+        // new lightbox context. The new photo's decode will start below.
+        currentPreviewTask?.cancel()
         lightboxPhotoID = photo.id
         selectedIDs = [photo.id]
         loadPreview(for: photo)
@@ -407,6 +422,10 @@ final class PhotoStore: ObservableObject {
     /// Close the lightbox. Selection is preserved so the user can keep
     /// working with the last-viewed photo (or any selection they had).
     func closeLightbox() {
+        // Cancel any pending preview decode — the user is leaving the
+        // lightbox; the photo they're navigating to next (in the grid)
+        // doesn't need the full preview.
+        currentPreviewTask?.cancel()
         lightboxPhotoID = nil
     }
 
@@ -420,6 +439,10 @@ final class PhotoStore: ObservableObject {
         let next = idx + step
         guard next >= 0, next < visible.count else { return }
         let target = visible[next]
+        // Cancel the in-flight decode for the photo the user is leaving.
+        // Without this, holding down an arrow key queues up N decodes
+        // and the user pays for every one before the next photo renders.
+        currentPreviewTask?.cancel()
         lightboxPhotoID = target.id
         selectedIDs = [target.id]
         loadPreview(for: target)

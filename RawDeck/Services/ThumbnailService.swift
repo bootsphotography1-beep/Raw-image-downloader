@@ -35,7 +35,7 @@ enum ThumbnailService {
     /// Sized for grid cells (default 512px). Returns nil if the file
     /// can't be read or isn't a supported image format.
     static func generateThumbnail(for url: URL, maxDimension: CGFloat = 512) -> NSImage? {
-        decode(url: url, maxDimension: maxDimension)
+        return decode(url: url, maxDimension: maxDimension)
     }
 
     /// Synchronously generate a 1600px placeholder preview. Used as a
@@ -54,12 +54,12 @@ enum ThumbnailService {
     /// than the camera's embedded 1600px baked-in JPEG.
     ///
     /// **Sizing**: we resize the demosaic to `lightboxMaxDimension`
-    /// (default 2400px longest side) using the same CGContext pass that
+    /// (default 1600px longest side) using the same CGContext pass that
     /// applies EXIF orientation. The full sensor capture goes through
     /// ImageIO's RAW decoder (so it's not the embedded JPEG), but the
-    /// result is sized appropriately for a 5K lightbox — about 3MB per
-    /// image, not 96MB. That's the difference between being able to
-    /// preview 5 photos before RAM fills vs. 30.
+    /// result is sized appropriately for a Retina lightbox — about 1MB
+    /// per image, not 96MB. That's the difference between being able to
+    /// preview 20 photos before RAM fills vs. 3.
     ///
     /// **Orientation**: EXIF orientation is read and applied so
     /// portrait photos render upright in the lightbox.
@@ -67,7 +67,7 @@ enum ThumbnailService {
     /// Cost: 200–500ms per photo on a recent Mac. Decoded off-main; the
     /// resulting CGImage is lazy (no bitmap allocation until painted),
     /// so RAM stays bounded.
-    static func generateFullPreview(for url: URL, maxDimension: CGFloat = 2400) -> NSImage? {
+    static func generateFullPreview(for url: URL, maxDimension: CGFloat = 1600) -> NSImage? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             // Not a RAW (or not an image ImageIO can decode natively) —
             // fall back to the embedded thumbnail path.
@@ -95,27 +95,27 @@ enum ThumbnailService {
     /// camera's embedded JPEG preview (or the JPEG's own pixels for
     /// non-RAW files). Fast but low-resolution.
     ///
-    /// macOS 27 / Xcode 26.5 quirk: for RAW files (CR3 especially),
-    /// `CGImageSourceCreateThumbnailAtIndex` hangs indefinitely. We
-    /// detect RAWs and go through the full-image path instead
-    /// (`CGImageSourceCreateImageAtIndex` + manual resize + orientation
-    /// fix). For non-RAWs, the thumbnail path is fine.
+    /// macOS 27 / Xcode 26.5 quirk: for some RAW files (CR3, especially
+    /// the ones from newer Canon bodies like R6m2), the fast thumbnail
+    /// path with `WithTransform: true` hangs indefinitely. So we try
+    /// the fast path first; if it returns a valid CGImage within a
+    /// reasonable time, use it. If not (or it returns nil), fall back
+    /// to the full-image path with manual EXIF orientation.
+    ///
+    /// Strategy:
+    /// 1. Try `CGImageSourceCreateThumbnailAtIndex` with WithTransform.
+    ///    - This is what the camera's embedded JPEG preview path uses.
+    ///    - Fast (~50-100ms per photo).
+    ///    - Honors EXIF orientation natively (no manual rotation needed).
+    /// 2. If that returns nil (some files), fall back to the full-image
+    ///    path: `CGImageSourceCreateImageAtIndex` + manual resize +
+    ///    orientation fix. Slower (~200-500ms) but always works.
     ///
     /// EXIF orientation: for the RAW path we read the EXIF tag and
     /// apply the rotation/scale transform ourselves before wrapping in
     /// NSImage, so portrait photos render upright. (The thumbnail
     /// path honors orientation via `WithTransform: true`.)
     private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
-        // macOS 27 / Xcode 26.5 quirk: for RAW files (CR3 especially),
-        // `CGImageSourceCreateThumbnailAtIndex` hangs indefinitely. We
-        // detect RAWs and go through the full-image path instead
-        // (`CGImageSourceCreateImageAtIndex` + manual resize + orientation
-        // fix). For non-RAWs, the thumbnail path is fine.
-        //
-        // EXIF orientation: for the RAW path we read the EXIF tag and
-        // apply the rotation/scale transform ourselves before wrapping in
-        // NSImage, so portrait photos render upright. (The thumbnail
-        // path honors orientation via `WithTransform: true`.)
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             return nil
         }
@@ -125,18 +125,43 @@ enum ThumbnailService {
         return decodeNonRAW(src: src, url: url, maxDimension: maxDimension)
     }
 
-    /// Decode a RAW file (CR3, NEF, ARW, etc.) using the full-image path
-    /// then resize + apply EXIF orientation ourselves.
+    /// Decode a RAW file (CR3, NEF, ARW, etc.).
+    ///
+    /// **Two-step strategy** because of the macOS 27 hang-on-some-CR3s
+    /// bug:
+    /// 1. **Try the fast path first**: `CGImageSourceCreateThumbnailAtIndex`
+    ///    with `WithTransform: true` and `ShouldCacheImmediately: false`.
+    ///    This reads the camera's embedded JPEG preview — about 1600×1080
+    ///    baked into the RAW at capture time. Resized to maxDimension
+    ///    via ImageIO's own scaler.
+    /// 2. **Fallback**: if the fast path returns nil (rare files where
+    ///    ImageIO refuses to read the embedded preview), do the full
+    ///    demosaic via `CGImageSourceCreateImageAtIndex` and manually
+    ///    resize + apply EXIF orientation.
     private static func decodeRAW(src: CGImageSource, url: URL, maxDimension: CGFloat) -> NSImage? {
+        // Step 1: Fast path — camera's embedded JPEG preview.
+        // WithTransform=true means ImageIO applies the EXIF orientation
+        // tag for us, so portrait photos render upright without us
+        // needing to do any transform math.
+        let thumbnailOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: false,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+        ]
+        if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbnailOptions as CFDictionary) {
+            return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        }
+        // Step 2: Slow path — full sensor decode + manual orientation.
+        // Used when the fast path returned nil (e.g., very old RAW
+        // formats without embedded previews).
         let fullOptions: [CFString: Any] = [
             kCGImageSourceShouldCacheImmediately: false,
         ]
         guard let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) else {
             return nil
         }
-        // Read EXIF orientation so we can rotate before wrapping.
         let orientation = exifOrientation(src: src)
-        // Resize + orient into a single bitmap operation.
         if let oriented = resizeAndOrient(cg: cg, orientation: orientation, maxDimension: maxDimension) {
             return NSImage(cgImage: oriented, size: NSSize(width: oriented.width, height: oriented.height))
         }
