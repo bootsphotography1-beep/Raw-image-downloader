@@ -27,7 +27,21 @@ struct ThumbnailCell: View {
                         Image(nsImage: thumb)
                             .resizable()
                             .aspectRatio(contentMode: .fit)
+                    } else if photo.thumbnailLoadAttempted {
+                        // Decode failed (QL returned nil + embedded-JPEG
+                        // fallback also failed). Show a recognizable
+                        // placeholder so the user knows the cell isn't
+                        // just slow to load.
+                        VStack(spacing: RDSpace.xs) {
+                            Image(systemName: "photo.badge.exclamationmark")
+                                .font(.title)
+                                .foregroundStyle(RDColor.textSecondary)
+                            Text("No preview")
+                                .font(RDType.caption)
+                                .foregroundStyle(RDColor.textSecondary)
+                        }
                     } else {
+                        // Still loading — show the spinner.
                         VStack {
                             ProgressView()
                                 .controlSize(.small)
@@ -37,7 +51,6 @@ struct ThumbnailCell: View {
                                 .foregroundStyle(RDColor.textSecondary)
                         }
                     }
-
                     // Pixelmator-sent badge — top-left of the cell, only
                     // rendered after the user has actually opened this photo
                     // in Pixelmator Pro (Photo.sentToPixelmator is set in

@@ -287,18 +287,21 @@ final class PhotoStore: ObservableObject {
         let id = photo.id
         let url = photo.url
         let wrapped = await Task.detached(priority: .userInitiated) {
-            // Returns NSImage? — may be nil for unsupported formats.
-            SendableImage(image: ThumbnailService.generateThumbnail(for: url) ?? NSImage())
+            // Returns NSImage? — may be nil if every fallback path failed.
+            // generateThumbnail has its own fallback chain (QL → smaller
+            // QL → embedded JPEG extraction) and only returns nil if
+            // everything fails.
+            SendableImage(image: ThumbnailService.generateThumbnail(for: url))
         }.value
         await MainActor.run { [weak owner] in
             guard let owner = owner else { return }
             owner.thumbnailInFlight.remove(id)
-            let thumb = wrapped.image
-            // Assign even if size is 0 — SwiftUI's Image will paint
-            // whatever it gets, and the user sees a blank cell instead
-            // of a stuck "Loading…" spinner.
             if let p = owner.photos.first(where: { $0.id == id }) {
-                p.thumbnail = thumb
+                p.thumbnail = wrapped.image
+                // Mark as attempted regardless of success/failure so the
+                // cell can stop showing the "Loading…" spinner and
+                // instead show a "broken image" icon if QL returned nil.
+                p.thumbnailLoadAttempted = true
             }
         }
     }

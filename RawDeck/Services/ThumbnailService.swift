@@ -43,7 +43,102 @@ enum ThumbnailService {
         // Bounded wait — QL can take a few seconds for the first RAW
         // after app launch (cold cache). After that it's 50-100ms.
         _ = sem.wait(timeout: .now() + 5.0)
-        return result
+        if result != nil {
+            return result
+        }
+        // Fallback 1: retry with smaller size (256px). Sometimes QL's
+        // cold-cache RAW decoder fails on large requests but succeeds
+        // on smaller ones.
+        if maxDimension > 256 {
+            let sem2 = DispatchSemaphore(value: 0)
+            generateThumbnailAsync(url: url, maxDimension: 256) { img in
+                result = img
+                sem2.signal()
+            }
+            _ = sem2.wait(timeout: .now() + 5.0)
+            if result != nil {
+                return result
+            }
+        }
+        // Fallback 2: extract embedded JPEG preview from CR3 container.
+        // Works for CR3 files specifically (Canon's ISO BMFF format).
+        if url.pathExtension.lowercased() == "cr3" {
+            return extractCR3EmbeddedPreview(url: url, maxDimension: maxDimension)
+        }
+        return nil
+    }
+
+    /// Extract the embedded JPEG preview from a Canon CR3 file's ISO
+    /// BMFF container and decode it. CR3 files have an "Exif" JPEG
+    /// preview typically stored in a separate `mdat` atom. We scan the
+    /// file looking for a JPEG marker (FFD8FF) and decode that.
+    ///
+    /// This bypasses Quick Look entirely. It's our last-resort
+    /// fallback when QL returns nil.
+    static func extractCR3EmbeddedPreview(url: URL, maxDimension: CGFloat) -> NSImage? {
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else {
+            return nil
+        }
+        // Scan for JPEG SOI marker (FFD8FF). Preview is typically in
+        // the second half of the file (after main RAW data).
+        let bytes = [UInt8](data)
+        let fileSize = bytes.count
+        guard fileSize > 1024 else { return nil }
+        let searchStart = fileSize / 2
+        var foundJPEGStart: Int? = nil
+        var i = searchStart
+        while i < fileSize - 3 {
+            if bytes[i] == 0xFF && bytes[i+1] == 0xD8 && bytes[i+2] == 0xFF {
+                foundJPEGStart = i
+                break
+            }
+            i += 1
+        }
+        guard let jpegStart = foundJPEGStart else {
+            return nil
+        }
+        // Find JPEG EOI marker (FFD9) to determine preview end.
+        var jpegEnd = fileSize
+        var j = jpegStart + 3
+        while j < fileSize - 1 {
+            if bytes[j] == 0xFF && bytes[j+1] == 0xD9 {
+                jpegEnd = j + 2
+                break
+            }
+            j += 1
+        }
+        let jpegData = data.subdata(in: jpegStart..<jpegEnd)
+        guard let nsImage = NSImage(data: jpegData) else {
+            return nil
+        }
+        // Downscale if needed using CGContext.
+        if let cg = nsImage.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            let srcW = CGFloat(cg.width)
+            let srcH = CGFloat(cg.height)
+            let scale = min(maxDimension / max(srcW, srcH), 1.0)
+            if scale < 1.0 {
+                let dstW = max(1, Int(srcW * scale))
+                let dstH = max(1, Int(srcH * scale))
+                if let ctx = CGContext(
+                    data: nil,
+                    width: dstW,
+                    height: dstH,
+                    bitsPerComponent: 8,
+                    bytesPerRow: 0,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                           | CGBitmapInfo.byteOrder32Little.rawValue
+                ) {
+                    ctx.interpolationQuality = .high
+                    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: dstW, height: dstH))
+                    if let resized = ctx.makeImage() {
+                        return NSImage(cgImage: resized, size: NSSize(width: dstW, height: dstH))
+                    }
+                }
+            }
+            return NSImage(cgImage: cg, size: NSSize(width: srcW, height: srcH))
+        }
+        return nsImage
     }
 
     /// Synchronous wrapper for the 1600px placeholder preview.
@@ -124,11 +219,14 @@ enum ThumbnailService {
             scale: effectiveScale,
             representationTypes: .thumbnail
         )
-        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, _ in
+        QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, error in
             DispatchQueue.main.async {
                 if let rep = rep {
                     handler(rep.nsImage)
                 } else {
+                    // QL failed to generate a thumbnail for this file.
+                    // Log it so we can see which files are problematic.
+                    NSLog("RawDeck: QL thumbnail failed for \(url.lastPathComponent): \(error?.localizedDescription ?? "no error")")
                     handler(nil)
                 }
             }

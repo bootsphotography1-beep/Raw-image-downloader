@@ -31,6 +31,11 @@ final class Photo: Identifiable, ObservableObject {
     @Published var sentToPixelmator: Date? = nil  // last time this photo was opened in Pixelmator Pro
     @Published var thumbnail: NSImage? = nil  // lazy-loaded by ThumbnailService
     @Published var preview: NSImage? = nil     // larger (1600px) lazy-loaded preview for the lightbox
+    /// True after we've tried (and either succeeded or failed) to load
+    /// the thumbnail. Distinguishes "still loading" from "failed to
+    /// load" so the cell can show a "broken image" icon instead of a
+    /// permanent spinner.
+    @Published var thumbnailLoadAttempted: Bool = false
 
     init(url: URL) {
         self.url = url
