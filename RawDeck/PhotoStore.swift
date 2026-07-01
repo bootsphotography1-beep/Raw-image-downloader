@@ -573,9 +573,19 @@ final class PhotoStore: ObservableObject {
 
     // MARK: - Export
 
+    /// Plain Sendable struct so we can publish export progress into
+    /// `@Published` from `Task.detached` without tripping Swift 6
+    /// strict-concurrency warnings about tuples and `MainActor.run`.
+    /// (Tuples aren't formally `Sendable` in Swift 6, so wrapping the
+    /// pair in a struct lets us publish it cleanly.)
+    struct ExportProgress: Sendable, Equatable {
+        var done: Int
+        var total: Int
+    }
+
     /// Track the most recent export operation's progress so the status
     /// bar can show it. Resets to nil when the export finishes.
-    @Published var exportProgress: (done: Int, total: Int)? = nil
+    @Published var exportProgress: ExportProgress? = nil
 
     /// Batch-export selected photos as their ORIGINAL files (no
     /// re-encoding) into a user-chosen destination folder. Shows an
@@ -610,7 +620,7 @@ final class PhotoStore: ObservableObject {
 
         let urls = targets.map { $0.url }
         let total = urls.count
-        exportProgress = (0, total)
+        exportProgress = ExportProgress(done: 0, total: total)
 
         // Copy off-main so a 1000-photo export doesn't block the UI.
         // (File copy is a synchronous sys call.) We hop back to the main
@@ -658,7 +668,7 @@ final class PhotoStore: ObservableObject {
                 let done = idx + 1
                 if done % 10 == 0 || done == total {
                     await MainActor.run { [weak self] in
-                        self?.exportProgress = (done, total)
+                        self?.exportProgress = ExportProgress(done: done, total: total)
                     }
                 }
             }
@@ -681,9 +691,9 @@ final class PhotoStore: ObservableObject {
                     }
                 }
                 self.alertMessage = lines.joined(separator: "\n")
-            }
         }
     }
+}
 }
 
 // MARK: - SortMode
