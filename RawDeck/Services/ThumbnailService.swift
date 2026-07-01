@@ -86,6 +86,7 @@ enum ThumbnailService {
     /// `CGImageSourceCreateThumbnailAtIndex` actually returns a
     /// CGImage we can wrap in an NSImage and hand to SwiftUI.
     private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
+        print("RawDeck: decode enter url=\(url.lastPathComponent) ext=\(url.pathExtension)")
         // Some Canon CR3 files (and a handful of other RAWs) need
         // ImageIO to be told the source type up front before it'll
         // produce a CGImage. Without this hint, CGImageSourceCreateWithURL
@@ -98,10 +99,12 @@ enum ThumbnailService {
             kCGImageSourceTypeIdentifierHint: UTType(filenameExtension: url.pathExtension.lowercased())?.identifier
                 ?? UTType.image.identifier
         ]
+        print("RawDeck: decode calling CGImageSourceCreateWithURL for \(url.lastPathComponent)")
         guard let src = CGImageSourceCreateWithURL(url as CFURL, typeHint as CFDictionary) else {
-            NSLog("RawDeck: CGImageSourceCreateWithURL failed for \(url.lastPathComponent)")
+            print("RawDeck: CGImageSourceCreateWithURL returned nil for \(url.lastPathComponent)")
             return nil
         }
+        print("RawDeck: decode got image source for \(url.lastPathComponent), trying thumbnail")
 
         // Try the embedded-preview thumbnail first — fast path.
         let thumbnailOptions: [CFString: Any] = [
@@ -110,22 +113,27 @@ enum ThumbnailService {
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
         ]
+        print("RawDeck: decode calling CGImageSourceCreateThumbnailAtIndex path1 for \(url.lastPathComponent)")
         if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbnailOptions as CFDictionary) {
+            print("RawDeck: decode path1 returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
             return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         }
+        print("RawDeck: decode path1 returned nil for \(url.lastPathComponent), trying path2")
 
         // Fallback 1: full image at index 0 (forces the system RAW
         // decoder to demosaic; works for most CR3s whose embedded
         // preview is corrupt or absent).
-        NSLog("RawDeck: thumbnail decode failed for \(url.lastPathComponent), trying full-image fallback")
         let fullOptions: [CFString: Any] = [
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
         ]
+        print("RawDeck: decode calling CGImageSourceCreateImageAtIndex path2 for \(url.lastPathComponent)")
         if let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) {
+            print("RawDeck: decode path2 returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
             return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         }
+        print("RawDeck: decode path2 returned nil for \(url.lastPathComponent), trying path3")
 
         // Fallback 2: create a thumbnail from the full image using
         // kCGImageSourceCreateThumbnailFromImageIfAbsent. This is the
@@ -137,12 +145,13 @@ enum ThumbnailService {
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
         ]
+        print("RawDeck: decode calling CGImageSourceCreateThumbnailAtIndex path3 for \(url.lastPathComponent)")
         if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, lastResortOptions as CFDictionary) {
-            NSLog("RawDeck: thumbnail recovered via last-resort fallback for \(url.lastPathComponent)")
+            print("RawDeck: decode path3 recovered \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
             return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         }
 
-        NSLog("RawDeck: all thumbnail decode paths failed for \(url.lastPathComponent)")
+        print("RawDeck: all thumbnail decode paths failed for \(url.lastPathComponent)")
         return nil
     }
 
