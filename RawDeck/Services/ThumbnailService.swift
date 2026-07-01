@@ -87,75 +87,51 @@ enum ThumbnailService {
     /// CGImage we can wrap in an NSImage and hand to SwiftUI.
     private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
         print("RawDeck: decode enter url=\(url.lastPathComponent) ext=\(url.pathExtension)")
-        // macOS 27 / Xcode 26.5 ImageIO bug: passing a type hint to
-        // CGImageSourceCreateWithURL for CR3 files causes the subsequent
-        // CGImageSourceCreateThumbnailAtIndex to hang indefinitely.
-        // Pass `nil` for the options so the system figures it out from
-        // magic bytes — slower but reliable.
+        // macOS 27 / Xcode 26.5 ImageIO bug: for Canon CR3 files,
+        // CGImageSourceCreateThumbnailAtIndex hangs indefinitely.
+        // We confirmed this with line-by-line logging — every CR3
+        // decode stalls at path1 regardless of `shouldCacheImmediately`
+        // value. So for RAW formats we skip the thumbnail path entirely
+        // and go straight to CGImageSourceCreateImageAtIndex (full image)
+        // + manual downscale.
         print("RawDeck: decode calling CGImageSourceCreateWithURL for \(url.lastPathComponent)")
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             print("RawDeck: CGImageSourceCreateWithURL returned nil for \(url.lastPathComponent)")
             return nil
         }
-        print("RawDeck: decode got image source for \(url.lastPathComponent), trying thumbnail")
+        print("RawDeck: decode got image source for \(url.lastPathComponent)")
 
-        // Try the embedded-preview thumbnail first — fast path.
-        //
-        // macOS 27: `kCGImageSourceShouldCacheImmediately: true` HANGS
-        // for CR3 (we confirmed via line-by-line logging — every CR3
-        // decode stalls at CGImageSourceCreateThumbnailAtIndex when
-        // caching is eager). The previous macOS-13-era fix was to set
-        // this to `true`, but that's now an indefinite block. Use
-        // `false` and accept that this might return nil for some
-        // edge-case CR3s — the fallback paths below handle that.
+        if isLikelyRAW(url) {
+            print("RawDeck: decode RAW branch for \(url.lastPathComponent) — skipping thumbnail path")
+            // RAW: get the full decoded image and downscale manually.
+            // shouldCacheImmediately: false to avoid any eager-cache hangs.
+            let fullOptions: [CFString: Any] = [
+                kCGImageSourceShouldCacheImmediately: false,
+            ]
+            print("RawDeck: decode calling CGImageSourceCreateImageAtIndex for \(url.lastPathComponent)")
+            if let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) {
+                print("RawDeck: decode full-image returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
+                return scaledNSImage(from: cg, maxDimension: maxDimension)
+            }
+            print("RawDeck: decode full-image returned nil for \(url.lastPathComponent)")
+            return nil
+        }
+
+        // Non-RAW (JPEG, HEIC, PNG, TIFF, etc.): the thumbnail path is
+        // fast and reliable on macOS 27. No need to downscale manually.
+        print("RawDeck: decode non-RAW branch for \(url.lastPathComponent) — trying thumbnail")
         let thumbnailOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: false,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
         ]
-        print("RawDeck: decode calling CGImageSourceCreateThumbnailAtIndex path1 for \(url.lastPathComponent)")
+        print("RawDeck: decode calling CGImageSourceCreateThumbnailAtIndex for \(url.lastPathComponent)")
         if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbnailOptions as CFDictionary) {
-            print("RawDeck: decode path1 returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
+            print("RawDeck: decode thumbnail returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
             return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         }
-        print("RawDeck: decode path1 returned nil for \(url.lastPathComponent), trying path2")
-
-        // Fallback 1: full image at index 0 (forces the system RAW
-        // decoder to demosaic; works for most CR3s whose embedded
-        // preview is corrupt or absent). Don't ask for a thumbnail —
-        // ask for the full image so CGImageSource goes through the
-        // RAW decoder path instead of the embedded-JPEG path.
-        //
-        // Note: `shouldCacheImmediately: false` here too, same reason.
-        let fullOptions: [CFString: Any] = [
-            kCGImageSourceShouldCacheImmediately: false,
-        ]
-        print("RawDeck: decode calling CGImageSourceCreateImageAtIndex path2 for \(url.lastPathComponent)")
-        if let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) {
-            // CGImageSourceCreateImageAtIndex returns the native-resolution
-            // CGImage. We then draw it into a smaller bitmap ourselves
-            // so the cell doesn't get a 6000×4000 image it has to scale
-            // down on the GPU every paint.
-            print("RawDeck: decode path2 returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
-            return scaledNSImage(from: cg, maxDimension: maxDimension)
-        }
-        print("RawDeck: decode path2 returned nil for \(url.lastPathComponent), trying path3")
-
-        // Fallback 2: last-resort thumbnail. Same fix — false for cache.
-        let lastResortOptions: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
-            kCGImageSourceShouldCacheImmediately: false,
-            kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maxDimension,
-        ]
-        print("RawDeck: decode calling CGImageSourceCreateThumbnailAtIndex path3 for \(url.lastPathComponent)")
-        if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, lastResortOptions as CFDictionary) {
-            print("RawDeck: decode path3 recovered \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
-            return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
-        }
-
-        print("RawDeck: all thumbnail decode paths failed for \(url.lastPathComponent)")
+        print("RawDeck: all decode paths failed for \(url.lastPathComponent)")
         return nil
     }
 
