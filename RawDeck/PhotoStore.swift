@@ -226,7 +226,16 @@ final class PhotoStore: ObservableObject {
         // same cell can't queue a redundant decode.
         for p in toLoad { thumbnailInFlight.insert(p.id) }
 
-        let maxParallel = max(2, ProcessInfo.processInfo.activeProcessorCount)
+        // Memory-conscious parallelism: each CR3 decode allocates a
+        // full-resolution CGImage (6000×4000 × 4 bytes = ~96 MB) plus
+        // the downscaled 512×N bitmap. Running N parallel decodes
+        // peaks at ~N×96 MB which is brutal on memory and slows the
+        // whole pipeline due to copy-on-write pressure. With full
+        // decodes taking 200-500 ms each, running 1-at-a-time on a
+        // 77-photo import is ~25-40 s total — slow but bounded. We
+        // allow 2 parallel so the user doesn't feel like the app is
+        // frozen while scrolling.
+        let maxParallel = 2
 
         // NOTE: this outer Task runs on @MainActor (inherited from the
         // method's actor). The semaphore version used to block MainActor

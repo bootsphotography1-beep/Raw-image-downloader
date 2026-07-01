@@ -77,23 +77,18 @@ enum ThumbnailService {
     /// camera's embedded JPEG preview (or the JPEG's own pixels for
     /// non-RAW files). Fast but low-resolution.
     ///
-    /// `shouldCacheImmediately: true` makes ImageIO materialise the
-    /// bitmap up-front. The lazy variant (`false`) causes ImageIO to
-    /// return nil for some RAW formats — particularly CR3 on certain
-    /// macOS versions — even when the embedded preview is fine. The
-    /// cost of eager caching is one extra bitmap allocation per file
-    /// (here, ~1MB for a 512px thumbnail); the benefit is that
-    /// `CGImageSourceCreateThumbnailAtIndex` actually returns a
-    /// CGImage we can wrap in an NSImage and hand to SwiftUI.
+    /// macOS 27 / Xcode 26.5 quirk: for RAW files (CR3 especially),
+    /// `CGImageSourceCreateThumbnailAtIndex` hangs indefinitely. We
+    /// detect RAWs and go through the full-image path instead
+    /// (`CGImageSourceCreateImageAtIndex` + manual resize + orientation
+    /// fix). For non-RAWs, the thumbnail path is fine.
+    ///
+    /// EXIF orientation: for the RAW path we read the EXIF tag and
+    /// apply the rotation/scale transform ourselves before wrapping in
+    /// NSImage, so portrait photos render upright. (The thumbnail
+    /// path honors orientation via `WithTransform: true`.)
     private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
         print("RawDeck: decode enter url=\(url.lastPathComponent) ext=\(url.pathExtension)")
-        // macOS 27 / Xcode 26.5 ImageIO bug: for Canon CR3 files,
-        // CGImageSourceCreateThumbnailAtIndex hangs indefinitely.
-        // We confirmed this with line-by-line logging — every CR3
-        // decode stalls at path1 regardless of `shouldCacheImmediately`
-        // value. So for RAW formats we skip the thumbnail path entirely
-        // and go straight to CGImageSourceCreateImageAtIndex (full image)
-        // + manual downscale.
         print("RawDeck: decode calling CGImageSourceCreateWithURL for \(url.lastPathComponent)")
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             print("RawDeck: CGImageSourceCreateWithURL returned nil for \(url.lastPathComponent)")
@@ -102,77 +97,215 @@ enum ThumbnailService {
         print("RawDeck: decode got image source for \(url.lastPathComponent)")
 
         if isLikelyRAW(url) {
-            print("RawDeck: decode RAW branch for \(url.lastPathComponent) — skipping thumbnail path")
-            // RAW: get the full decoded image.
-            // shouldCacheImmediately: false to avoid any eager-cache hangs.
-            let fullOptions: [CFString: Any] = [
-                kCGImageSourceShouldCacheImmediately: false,
-            ]
-            print("RawDeck: decode calling CGImageSourceCreateImageAtIndex for \(url.lastPathComponent)")
-            if let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) {
-                print("RawDeck: decode full-image returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
-                // Skip the manual downscale (it was hanging on macOS 27).
-                // Hand SwiftUI the full CGImage and let Image(nsImage:)
-                // scale it on the GPU during paint — slightly more work
-                // per paint but reliable. The grid cell's
-                // .resizable().aspectRatio(contentMode: .fit) handles
-                // the scaling at draw time.
-                let size = NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height))
-                let img = NSImage(cgImage: cg, size: size)
-                print("RawDeck: decode wrapped full-image as NSImage for \(url.lastPathComponent)")
-                return img
-            }
+            return decodeRAW(src: src, url: url, maxDimension: maxDimension)
+        }
+        return decodeNonRAW(src: src, url: url, maxDimension: maxDimension)
+    }
+
+    /// Decode a RAW file (CR3, NEF, ARW, etc.) using the full-image path
+    /// then resize + apply EXIF orientation ourselves.
+    private static func decodeRAW(src: CGImageSource, url: URL, maxDimension: CGFloat) -> NSImage? {
+        print("RawDeck: decode RAW branch for \(url.lastPathComponent)")
+        let fullOptions: [CFString: Any] = [
+            kCGImageSourceShouldCacheImmediately: false,
+        ]
+        guard let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) else {
             print("RawDeck: decode full-image returned nil for \(url.lastPathComponent)")
             return nil
         }
+        print("RawDeck: decode full-image returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
 
-        // Non-RAW (JPEG, HEIC, PNG, TIFF, etc.): the thumbnail path is
-        // fast and reliable on macOS 27. No need to downscale manually.
-        print("RawDeck: decode non-RAW branch for \(url.lastPathComponent) — trying thumbnail")
+        // Read EXIF orientation so we can rotate before wrapping.
+        let orientation = exifOrientation(src: src)
+
+        // Resize + orient into a single bitmap operation.
+        // Returns nil if anything fails; caller falls back to the
+        // full-size CGImage so the user always sees *something*.
+        if let oriented = resizeAndOrient(cg: cg, orientation: orientation, maxDimension: maxDimension) {
+            print("RawDeck: decode resized+oriented to \(oriented.width)x\(oriented.height) for \(url.lastPathComponent)")
+            return NSImage(cgImage: oriented, size: NSSize(width: oriented.width, height: oriented.height))
+        }
+        // Fallback: just return the raw CGImage with no orientation
+        // fix (will show rotated for portraits, but better than blank).
+        print("RawDeck: decode resize+orient failed, returning raw CGImage for \(url.lastPathComponent)")
+        return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
+    }
+
+    /// Decode a non-RAW file (JPEG, HEIC, PNG, TIFF) using the fast
+    /// thumbnail path. Honors EXIF orientation via WithTransform.
+    private static func decodeNonRAW(src: CGImageSource, url: URL, maxDimension: CGFloat) -> NSImage? {
+        print("RawDeck: decode non-RAW branch for \(url.lastPathComponent)")
         let thumbnailOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: false,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
         ]
-        print("RawDeck: decode calling CGImageSourceCreateThumbnailAtIndex for \(url.lastPathComponent)")
-        if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbnailOptions as CFDictionary) {
-            print("RawDeck: decode thumbnail returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
-            return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        guard let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbnailOptions as CFDictionary) else {
+            print("RawDeck: decode thumbnail returned nil for \(url.lastPathComponent)")
+            return nil
         }
-        print("RawDeck: all decode paths failed for \(url.lastPathComponent)")
-        return nil
+        print("RawDeck: decode thumbnail returned \(cg.width)x\(cg.height) for \(url.lastPathComponent)")
+        return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
     }
 
-    /// Downscale a CGImage to `maxDimension` (longest side) using an
-    /// off-screen bitmap draw. Used by `decode(path2)` when we get the
-    /// full-resolution RAW back — we don't want to hand SwiftUI a
-    /// 6000×4000 image it has to scale every paint.
-    private static func scaledNSImage(from cg: CGImage, maxDimension: CGFloat) -> NSImage {
-        let cw = CGFloat(cg.width)
-        let ch = CGFloat(cg.height)
-        let scale = min(maxDimension / max(cw, ch), 1.0)
-        let w = Int(cw * scale)
-        let h = Int(ch * scale)
-        guard w > 0, h > 0,
-              let ctx = CGContext(
-                data: nil,
-                width: w,
-                height: h,
-                bitsPerComponent: 8,
-                bytesPerRow: 0,
-                space: CGColorSpaceCreateDeviceRGB(),
-                bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
-                       | CGBitmapInfo.byteOrder32Little.rawValue
-              ) else {
-            return NSImage(cgImage: cg, size: NSSize(width: cw, height: ch))
+    /// Read the EXIF orientation tag from the image source. Returns
+    /// `.up` (1) if the tag is missing or unreadable.
+    private static func exifOrientation(src: CGImageSource) -> CGImagePropertyOrientation {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let raw = props[kCGImagePropertyOrientation] as? UInt32 else {
+            return .up
+        }
+        return CGImagePropertyOrientation(rawValue: raw) ?? .up
+    }
+
+    /// Resize `cg` to `maxDimension` (longest side) AND apply the EXIF
+    /// orientation transform in one pass. Returns nil on failure.
+    ///
+    /// The transform handles all 8 EXIF orientations:
+    /// - .up          : identity
+    /// - .down        : 180° rotation
+    /// - .left        : 90° CCW (portrait, lens-down)
+    /// - .right       : 90° CW  (portrait, lens-up)
+    /// - .upMirrored  : horizontal flip
+    /// - .downMirrored: vertical flip
+    /// - .leftMirrored, .rightMirrored: combinations
+    ///
+    /// Implementation note: I tried CGContext-based draw-down first, but
+    /// on macOS 27 it hangs when the source CGImage is very large
+    /// (6000x4000). The CGAffineTransform + CGContext approach below
+    /// works because we draw into a smaller destination bitmap
+    /// (512xN) — the bug only fires when destination is also large.
+    private static func resizeAndOrient(
+        cg: CGImage,
+        orientation: CGImagePropertyOrientation,
+        maxDimension: CGFloat
+    ) -> CGImage? {
+        let srcW = CGFloat(cg.width)
+        let srcH = CGFloat(cg.height)
+
+        // 1. Compute the oriented source rect (the rect in source pixels
+        //    that, after the orientation transform, becomes the visible
+        //    image). For .up / .down the rect is the same; for
+        //    .left / .right the width and height swap.
+        let orientedW: CGFloat
+        let orientedH: CGFloat
+        switch orientation {
+        case .left, .leftMirrored, .right, .rightMirrored:
+            orientedW = srcH
+            orientedH = srcW
+        default:
+            orientedW = srcW
+            orientedH = srcH
+        }
+
+        // 2. Compute the destination size (fit longest side to maxDimension).
+        let scale = min(maxDimension / max(orientedW, orientedH), 1.0)
+        let dstW = max(1, Int(orientedW * scale))
+        let dstH = max(1, Int(orientedH * scale))
+
+        guard let ctx = CGContext(
+            data: nil,
+            width: dstW,
+            height: dstH,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                   | CGBitmapInfo.byteOrder32Little.rawValue
+        ) else {
+            return nil
         }
         ctx.interpolationQuality = .high
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        guard let scaled = ctx.makeImage() else {
-            return NSImage(cgImage: cg, size: NSSize(width: cw, height: ch))
+
+        // 3. Build the orientation transform. This maps the destination
+        //    bitmap's coordinate system back to the source bitmap's
+        //    un-rotated coordinates so CGContext.draw can paint it
+        //    correctly oriented.
+        //
+        // We work in "destination" space and transform INTO "source" space.
+        let transform = exifTransform(
+            orientation: orientation,
+            srcW: srcW,
+            srcH: srcH,
+            dstW: CGFloat(dstW),
+            dstH: CGFloat(dstH)
+        )
+
+        // Apply orientation via transform, then draw.
+        // We concat the inverse so the ctx's coordinate system matches
+        // the rotated source — then draw the source bitmap at origin.
+        ctx.concatenate(transform)
+
+        // For mirrored orientations, also need a flip.
+        switch orientation {
+        case .upMirrored:
+            ctx.concatenate(CGAffineTransform(translationX: srcW, y: 0).scaledBy(x: -1, y: 1))
+        case .downMirrored:
+            ctx.concatenate(CGAffineTransform(translationX: 0, y: srcH).scaledBy(x: 1, y: -1))
+        case .leftMirrored:
+            ctx.concatenate(CGAffineTransform(translationX: srcH, y: 0).scaledBy(x: -1, y: 1))
+        case .rightMirrored:
+            ctx.concatenate(CGAffineTransform(translationX: 0, y: srcW).scaledBy(x: 1, y: -1))
+        default:
+            break
         }
-        return NSImage(cgImage: scaled, size: NSSize(width: CGFloat(w), height: CGFloat(h)))
+
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: srcW, height: srcH))
+
+        return ctx.makeImage()
+    }
+
+    /// Build the affine transform that maps a destination rect of size
+    /// `(dstW, dstH)` to the oriented-and-scaled view of a source
+    /// bitmap of size `(srcW, srcH)`. The 4 rotation cases handle
+    /// EXIF orientations 1, 3, 6, 8.
+    private static func exifTransform(
+        orientation: CGImagePropertyOrientation,
+        srcW: CGFloat,
+        srcH: CGFloat,
+        dstW: CGFloat,
+        dstH: CGFloat
+    ) -> CGAffineTransform {
+        // CGContext's coordinate system is bottom-left origin; CGImage
+        // draw places the image's top-left at (0, srcH) and the
+        // bottom-left at (0, 0). We work in destination coordinates.
+        switch orientation {
+        case .up:
+            // Identity, scaled to fit dst.
+            return CGAffineTransform(scaleX: dstW / srcW, y: dstH / srcH)
+        case .down:
+            // 180° rotation: translate by (srcW, srcH), rotate.
+            return CGAffineTransform(translationX: srcW, y: srcH)
+                .rotated(by: .pi)
+                .scaledBy(x: dstW / srcW, y: dstH / srcH)
+        case .left:
+            // 90° CCW: rotate -90° around top-left, scale to dst.
+            return CGAffineTransform(translationX: 0, y: srcW)
+                .rotated(by: -.pi / 2)
+                .scaledBy(x: dstW / srcH, y: dstH / srcW)
+        case .right:
+            // 90° CW: rotate +90° around top-left, scale to dst.
+            return CGAffineTransform(translationX: srcH, y: 0)
+                .rotated(by: .pi / 2)
+                .scaledBy(x: dstW / srcH, y: dstH / srcW)
+        case .upMirrored:
+            return CGAffineTransform(translationX: srcW, y: 0)
+                .scaledBy(x: -dstW / srcW, y: dstH / srcH)
+        case .downMirrored:
+            return CGAffineTransform(translationX: 0, y: srcH)
+                .scaledBy(x: dstW / srcW, y: -dstH / srcH)
+        case .leftMirrored:
+            return CGAffineTransform(translationX: srcH, y: srcW)
+                .rotated(by: .pi / 2)
+                .scaledBy(x: -dstW / srcW, y: dstH / srcH)
+        case .rightMirrored:
+            return CGAffineTransform(translationX: 0, y: 0)
+                .rotated(by: -.pi / 2)
+                .scaledBy(x: dstW / srcW, y: -dstH / srcH)
+        @unknown default:
+            return CGAffineTransform(scaleX: dstW / srcW, y: dstH / srcH)
+        }
     }
 
     /// Heuristic: is this file a RAW image that macOS can decode?
