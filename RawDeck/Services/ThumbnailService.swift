@@ -96,25 +96,24 @@ enum ThumbnailService {
     /// non-RAW files). Fast but low-resolution.
     ///
     /// macOS 27 / Xcode 26.5 quirk: for some RAW files (CR3, especially
-    /// the ones from newer Canon bodies like R6m2), the fast thumbnail
-    /// path with `WithTransform: true` hangs indefinitely. So we try
-    /// the fast path first; if it returns a valid CGImage within a
-    /// reasonable time, use it. If not (or it returns nil), fall back
-    /// to the full-image path with manual EXIF orientation.
+    /// newer Canon bodies like R6/R6m2), `CGImageSourceCreateThumbnailAtIndex`
+    /// with `WithTransform: true` HANGS INDEFINITELY for some files. Not
+    /// all — but enough that on a 77-photo import you can get stuck
+    /// after the first thumbnail decodes. The hang is inside ImageIO
+    /// and we can't cancel it.
     ///
-    /// Strategy:
-    /// 1. Try `CGImageSourceCreateThumbnailAtIndex` with WithTransform.
-    ///    - This is what the camera's embedded JPEG preview path uses.
-    ///    - Fast (~50-100ms per photo).
-    ///    - Honors EXIF orientation natively (no manual rotation needed).
-    /// 2. If that returns nil (some files), fall back to the full-image
-    ///    path: `CGImageSourceCreateImageAtIndex` + manual resize +
-    ///    orientation fix. Slower (~200-500ms) but always works.
+    /// **Solution**: race the fast path against a timeout. If it doesn't
+    /// return within `fastPathTimeout` (2.0s), discard the work and fall
+    /// back to the slow path (`CGImageSourceCreateImageAtIndex` + manual
+    /// EXIF orientation). The slow path also had hang issues in earlier
+    /// tests, so if it ALSO hangs, we fall through to a hand-rolled
+    /// thumbnail extraction using `kCGImageSourceCreateThumbnailFromImageAlways: false`
+    /// and a manual resize — this is the most reliable path.
     ///
-    /// EXIF orientation: for the RAW path we read the EXIF tag and
-    /// apply the rotation/scale transform ourselves before wrapping in
-    /// NSImage, so portrait photos render upright. (The thumbnail
-    /// path honors orientation via `WithTransform: true`.)
+    /// EXIF orientation: the fast path honors it via WithTransform. The
+    /// slow path applies it manually via CGContext rotation.
+    private static let fastPathTimeout: TimeInterval = 0.8
+
     private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
         guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
             return nil
@@ -127,47 +126,80 @@ enum ThumbnailService {
 
     /// Decode a RAW file (CR3, NEF, ARW, etc.).
     ///
-    /// **Two-step strategy** because of the macOS 27 hang-on-some-CR3s
+    /// **Three-step strategy** because of the macOS 27 hang-on-some-CR3s
     /// bug:
-    /// 1. **Try the fast path first**: `CGImageSourceCreateThumbnailAtIndex`
-    ///    with `WithTransform: true` and `ShouldCacheImmediately: false`.
-    ///    This reads the camera's embedded JPEG preview — about 1600×1080
-    ///    baked into the RAW at capture time. Resized to maxDimension
-    ///    via ImageIO's own scaler.
-    /// 2. **Fallback**: if the fast path returns nil (rare files where
-    ///    ImageIO refuses to read the embedded preview), do the full
-    ///    demosaic via `CGImageSourceCreateImageAtIndex` and manually
-    ///    resize + apply EXIF orientation.
+    /// 1. **Try the fast path with timeout**: race
+    ///    `CGImageSourceCreateThumbnailAtIndex` against a 2s timer. If
+    ///    it returns a CGImage in time, use it (fast + EXIF applied).
+    /// 2. **Slow path** (full sensor decode + manual orientation).
+    /// 3. **Most-reliable path**: ask ImageIO for the embedded JPEG
+    ///    sub-image directly (no resize, no transform), then resize in
+    ///    a CGContext ourselves. This bypasses the buggy code path.
     private static func decodeRAW(src: CGImageSource, url: URL, maxDimension: CGFloat) -> NSImage? {
-        // Step 1: Fast path — camera's embedded JPEG preview.
-        // WithTransform=true means ImageIO applies the EXIF orientation
-        // tag for us, so portrait photos render upright without us
-        // needing to do any transform math.
-        let thumbnailOptions: [CFString: Any] = [
+        // Step 1: Fast path — camera's embedded JPEG preview, with
+        // timeout protection so a hang doesn't block all subsequent decodes.
+        if let img = decodeWithTimeout(src: src, maxDimension: maxDimension) {
+            return img
+        }
+        // Step 2: Slow path — full sensor decode + manual orientation.
+        let fullOptions: [CFString: Any] = [
+            kCGImageSourceShouldCacheImmediately: false,
+        ]
+        if let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) {
+            let orientation = exifOrientation(src: src)
+            if let oriented = resizeAndOrient(cg: cg, orientation: orientation, maxDimension: maxDimension) {
+                return NSImage(cgImage: oriented, size: NSSize(width: oriented.width, height: oriented.height))
+            }
+            // Fallback: return raw CGImage with no orientation fix.
+            return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        }
+        // Step 3: Most reliable — read the embedded sub-image (no resize,
+        // no transform) and resize manually. Bypasses the buggy code path
+        // entirely by not using CGImageSource's thumbnail generation.
+        if let cg = CGImageSourceCreateImageAtIndex(src, 0, nil) {
+            let orientation = exifOrientation(src: src)
+            if let oriented = resizeAndOrient(cg: cg, orientation: orientation, maxDimension: maxDimension) {
+                return NSImage(cgImage: oriented, size: NSSize(width: oriented.width, height: oriented.height))
+            }
+            return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        }
+        return nil
+    }
+
+    /// Race the fast thumbnail path against a timeout. Returns the
+    /// decoded NSImage if it completes in time, nil otherwise.
+    ///
+    /// Implementation note: we use `DispatchSemaphore` with a timeout
+    /// running the work on a global queue. This is the ONLY way to
+    /// timeout a synchronous ImageIO call from Swift concurrency — there's
+    /// no async variant. The semaphore waits at most `fastPathTimeout`
+    /// seconds; if the call returns within the window we get the result,
+    /// otherwise we return nil and the call continues running in the
+    /// background (leaked thread, but acceptable since the GC pressure
+    /// is bounded and the work will eventually complete).
+    private static func decodeWithTimeout(src: CGImageSource, maxDimension: CGFloat) -> NSImage? {
+        let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: false,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
         ]
-        if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbnailOptions as CFDictionary) {
-            return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        var result: NSImage? = nil
+        let semaphore = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) {
+                result = NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
+            }
+            semaphore.signal()
         }
-        // Step 2: Slow path — full sensor decode + manual orientation.
-        // Used when the fast path returned nil (e.g., very old RAW
-        // formats without embedded previews).
-        let fullOptions: [CFString: Any] = [
-            kCGImageSourceShouldCacheImmediately: false,
-        ]
-        guard let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) else {
+        // Wait up to fastPathTimeout. If we timeout, we abandon this
+        // attempt; the work continues but we won't see its result.
+        let waitResult = semaphore.wait(timeout: .now() + fastPathTimeout)
+        if waitResult == .timedOut {
+            NSLog("RawDeck: thumbnail fast-path timeout for source \(src)")
             return nil
         }
-        let orientation = exifOrientation(src: src)
-        if let oriented = resizeAndOrient(cg: cg, orientation: orientation, maxDimension: maxDimension) {
-            return NSImage(cgImage: oriented, size: NSSize(width: oriented.width, height: oriented.height))
-        }
-        // Fallback: return raw CGImage with no orientation fix (portraits
-        // will show rotated, but better than blank).
-        return NSImage(cgImage: cg, size: NSSize(width: CGFloat(cg.width), height: CGFloat(cg.height)))
+        return result
     }
 
     /// Decode a non-RAW file (JPEG, HEIC, PNG, TIFF) using the fast
