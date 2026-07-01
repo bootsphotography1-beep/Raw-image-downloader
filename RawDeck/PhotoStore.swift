@@ -210,9 +210,17 @@ final class PhotoStore: ObservableObject {
     ///   draw time, so we don't double the RAM cost by eagerly
     ///   materializing a 512-pixel thumbnail.
     func loadThumbnails(in range: Range<Int>) {
-        guard !isLoading else { return }
+        print("RawDeck: loadThumbnails range=\(range) photos.count=\(photos.count)")
+        guard !isLoading else {
+            print("RawDeck: loadThumbnails bailed because isLoading=true")
+            return
+        }
         let toLoad = photos[range].filter { $0.thumbnail == nil && !thumbnailInFlight.contains($0.id) }
-        guard !toLoad.isEmpty else { return }
+        guard !toLoad.isEmpty else {
+            print("RawDeck: loadThumbnails bailed because toLoad empty")
+            return
+        }
+        print("RawDeck: loadThumbnails will decode \(toLoad.count) photos")
 
         // Mark them in-flight up front so a subsequent .onAppear for the
         // same cell can't queue a redundant decode.
@@ -269,10 +277,11 @@ final class PhotoStore: ObservableObject {
     private static func decodeOneThumbnail(photo: Photo, owner: PhotoStore?) async {
         let id = photo.id
         let url = photo.url
+        print("RawDeck: decodeOneThumbnail starting for \(url.lastPathComponent)")
         let wrapped = await Task.detached(priority: .userInitiated) {
-            SendableImage(
-                image: ThumbnailService.generateThumbnail(for: url) ?? NSImage()
-            )
+            let img = ThumbnailService.generateThumbnail(for: url)
+            print("RawDeck: generateThumbnail returned \(img == nil ? "nil" : "\(Int(img!.size.width))x\(Int(img!.size.height))") for \(url.lastPathComponent)")
+            return SendableImage(image: img ?? NSImage())
         }.value
         await MainActor.run { [weak owner] in
             guard let owner = owner else { return }
@@ -288,13 +297,13 @@ final class PhotoStore: ObservableObject {
             // forever. NSLog if it's a true failure so we can see it in
             // Console.app.
             if thumb.size.width == 0 {
-                NSLog("RawDeck: thumbnail decode produced 0×0 image for \(url.lastPathComponent)")
+                print("RawDeck: thumbnail decode produced 0×0 image for \(url.lastPathComponent)")
             }
             if let p = owner.photos.first(where: { $0.id == id }) {
                 p.thumbnail = thumb
-                NSLog("RawDeck: assigned thumbnail for \(url.lastPathComponent) size=\(Int(thumb.size.width))x\(Int(thumb.size.height))")
+                print("RawDeck: assigned thumbnail for \(url.lastPathComponent) size=\(Int(thumb.size.width))x\(Int(thumb.size.height))")
             } else {
-                NSLog("RawDeck: photo \(url.lastPathComponent) no longer in store at assignment time")
+                print("RawDeck: photo \(url.lastPathComponent) no longer in store at assignment time")
             }
         }
     }
