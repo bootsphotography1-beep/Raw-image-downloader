@@ -54,7 +54,7 @@ struct RawDeckApp: App {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(store.mode != .library || store.photos.isEmpty)
 
-                ExportCommand()
+                ExportCommand(store: store)
 
                 Divider()
 
@@ -117,8 +117,26 @@ struct RawDeckApp: App {
 /// referenced as a menu item inside the `.commands { CommandMenu }`
 /// builder — Commands syntax doesn't accept inline `Button` declarations
 /// with arbitrary modifiers, but it happily accepts a nested View.
+///
+/// **Why `store` is passed in instead of fetched via `@EnvironmentObject`:**
+/// `ExportCommand` is instantiated from `CommandMenu` inside the
+/// Scene's `.commands { ... }` modifier. The `.environmentObject(store)`
+/// modifier lives on the `Window` (the View tree), but **Commands are
+/// not descendants of the Window's view hierarchy** — they live in a
+/// separate SwiftUI environment. So `@EnvironmentObject var store` here
+/// resolves to nil and SwiftUI's runtime crashes with:
+///
+///     Fatal error: No ObservableObject of type PhotoStore found.
+///     A View.environmentObject(_:) for PhotoStore may be missing
+///     as an ancestor of this view.
+///
+/// Passing `store` directly as a constructor parameter captures the
+/// `@StateObject` reference from `RawDeckApp` (which is in scope here)
+/// instead, sidestepping the broken environment chain. This matches the
+/// pattern used by the sibling `Button(...) { store.foo() }` menu
+/// items, which capture `store` directly from `RawDeckApp`'s StateObject.
 struct ExportCommand: View {
-    @EnvironmentObject var store: PhotoStore
+    @ObservedObject var store: PhotoStore
     var body: some View {
         Button("Export Selected as Originals…") {
             store.exportSelection()
