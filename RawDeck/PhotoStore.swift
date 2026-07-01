@@ -278,11 +278,19 @@ final class PhotoStore: ObservableObject {
             guard let owner = owner else { return }
             owner.thumbnailInFlight.remove(id)
             let thumb = wrapped.image
-            // Only assign if the photo is still in the store — the user
-            // might have started a new import or closed the lightbox
-            // mid-decode.
-            if thumb.size.width > 0,
-               let p = owner.photos.first(where: { $0.id == id }) {
+            // Assign the thumbnail even if size.width is 0 — SwiftUI's
+            // `Image` will paint whatever it gets (empty CGImage → blank
+            // cell, but the "Loading…" spinner goes away and the user
+            // sees the truth instead of an indefinite spinner). The
+            // earlier `size.width > 0` guard meant that any decode
+            // failure — CR3 with corrupt embedded preview, weird
+            // orientation, etc. — left every cell stuck on "Loading…"
+            // forever. NSLog if it's a true failure so we can see it in
+            // Console.app.
+            if thumb.size.width == 0 {
+                NSLog("RawDeck: thumbnail decode produced 0×0 image for \(url.lastPathComponent)")
+            }
+            if let p = owner.photos.first(where: { $0.id == id }) {
                 p.thumbnail = thumb
             }
         }

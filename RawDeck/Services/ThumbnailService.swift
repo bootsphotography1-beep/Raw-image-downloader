@@ -86,34 +86,65 @@ enum ThumbnailService {
     /// `CGImageSourceCreateThumbnailAtIndex` actually returns a
     /// CGImage we can wrap in an NSImage and hand to SwiftUI.
     private static func decode(url: URL, maxDimension: CGFloat) -> NSImage? {
-        let options: [CFString: Any] = [
+        // Some Canon CR3 files (and a handful of other RAWs) need
+        // ImageIO to be told the source type up front before it'll
+        // produce a CGImage. Without this hint, CGImageSourceCreateWithURL
+        // can succeed but the thumbnail path returns nil. Using
+        // kCGImageSourceTypeIdentifierHint with the file's UTI makes
+        // ImageIO skip its magic-byte sniffing (which can miss CR3s
+        // written by older Camera Connect utilities) and load the
+        // proper RAW decoder.
+        let typeHint: [CFString: Any] = [
+            kCGImageSourceTypeIdentifierHint: UTType(filenameExtension: url.pathExtension.lowercased())?.identifier
+                ?? UTType.image.identifier
+        ]
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, typeHint as CFDictionary) else {
+            NSLog("RawDeck: CGImageSourceCreateWithURL failed for \(url.lastPathComponent)")
+            return nil
+        }
+
+        // Try the embedded-preview thumbnail first — fast path.
+        let thumbnailOptions: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceShouldCacheImmediately: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
             kCGImageSourceThumbnailMaxPixelSize: maxDimension,
         ]
-        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
-            NSLog("RawDeck: CGImageSourceCreateWithURL failed for \(url.lastPathComponent)")
-            return nil
+        if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, thumbnailOptions as CFDictionary) {
+            return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         }
-        if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, options as CFDictionary) {
-            let size = NSSize(width: cg.width, height: cg.height)
-            return NSImage(cgImage: cg, size: size)
-        }
-        // Fallback path: some RAW files (occasionally CR3 with unusual
-        // orientations, and a few other edge cases) fail to produce a
-        // thumbnail from the embedded preview. Fall back to creating
-        // the full image at index 0, which triggers ImageIO's full
-        // decoder and works for everything ImageIO knows about.
+
+        // Fallback 1: full image at index 0 (forces the system RAW
+        // decoder to demosaic; works for most CR3s whose embedded
+        // preview is corrupt or absent).
         NSLog("RawDeck: thumbnail decode failed for \(url.lastPathComponent), trying full-image fallback")
-        if let cg = CGImageSourceCreateImageAtIndex(src, 0, options as CFDictionary) {
-            let size = NSSize(width: cg.width, height: cg.height)
-            return NSImage(cgImage: cg, size: size)
+        let fullOptions: [CFString: Any] = [
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+        ]
+        if let cg = CGImageSourceCreateImageAtIndex(src, 0, fullOptions as CFDictionary) {
+            return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
         }
-        NSLog("RawDeck: both thumbnail and full-image decode failed for \(url.lastPathComponent)")
+
+        // Fallback 2: create a thumbnail from the full image using
+        // kCGImageSourceCreateThumbnailFromImageIfAbsent. This is the
+        // last-resort path for Canon CR3s where both the embedded
+        // preview AND the direct-index decode return nil.
+        let lastResortOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxDimension,
+        ]
+        if let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, lastResortOptions as CFDictionary) {
+            NSLog("RawDeck: thumbnail recovered via last-resort fallback for \(url.lastPathComponent)")
+            return NSImage(cgImage: cg, size: NSSize(width: cg.width, height: cg.height))
+        }
+
+        NSLog("RawDeck: all thumbnail decode paths failed for \(url.lastPathComponent)")
         return nil
     }
-
 
     /// Heuristic: is this file a RAW image that macOS can decode?
     /// Checks the file extension against a list of common RAW formats.
