@@ -31,8 +31,7 @@ enum MetadataService {
 
     // MARK: - Public API
 
-    /// Result of a write-and-eject operation, surfaced to the user
-    /// via an alert and the status bar.
+    /// Snapshot of sidecars written for one photo. Used internally.
     struct SaveResult: Sendable {
         var writtenCount: Int = 0
         var skippedCount: Int = 0  // photos with no rating/reject to save
@@ -43,56 +42,6 @@ enum MetadataService {
 
         var hasFailures: Bool { failedCount > 0 }
         var hasContent: Bool { writtenCount > 0 }
-    }
-
-    /// Write XMP sidecars for every photo that has a rating or reject
-    /// flag set, then optionally eject the volume containing the
-    /// folder. Runs on a detached task; reports progress via the
-    /// `progress` callback.
-    ///
-    /// Threading: ALL file I/O runs on a `Task.detached` — the calling
-    /// MainActor isn't blocked even for thousands of files.
-    ///
-    /// - Parameters:
-    ///   - photos: all photos in the current session
-    ///   - folder: the imported folder (used to find the volume for eject)
-    ///   - ejectAfter: if true, run `diskutil eject` after writing
-    ///   - progress: callback invoked on MainActor with `(done, total)`
-    static func saveRatingsAndEject(
-        photos: [Photo],
-        folder: URL?,
-        ejectAfter: Bool,
-        progress: @escaping (Int, Int) -> Void
-    ) async -> SaveResult {
-        let photosToSave = photos.filter { $0.starRating > 0 || $0.isRejected }
-        let total = photosToSave.count
-        let result = await Task.detached(priority: .userInitiated) { () -> SaveResult in
-            var r = SaveResult()
-            r.skippedCount = photos.count - total
-
-            for (idx, photo) in photosToSave.enumerated() {
-                do {
-                    try writeXMPSidecar(for: photo)
-                    r.writtenCount += 1
-                } catch {
-                    r.failedCount += 1
-                    r.failedFiles.append(photo.fileName)
-                }
-                let done = idx + 1
-                await MainActor.run { progress(done, total) }
-            }
-
-            if ejectAfter, let folder = folder {
-                do {
-                    try ejectVolume(containing: folder)
-                    r.ejected = true
-                } catch {
-                    r.ejectError = error.localizedDescription
-                }
-            }
-            return r
-        }.value
-        return result
     }
 
     // MARK: - XMP writing
@@ -112,9 +61,15 @@ enum MetadataService {
     /// No-op (and no error) if the photo has no rating and no reject
     /// flag — nothing to save.
     ///
-    /// Two overloads: one taking a `Photo` (for in-app use) and one
-    /// taking raw values (for use from `Task.detached` where Photo's
-    /// `@MainActor` isolation makes it awkward to construct).
+    /// Two overloads: one taking a `Photo` (for in-app use from the
+    /// MainActor) and one taking raw values (for use from `Task.detached`
+    /// where Photo's `@MainActor` isolation makes it awkward to construct).
+    ///
+    /// The `Photo`-taking overload is `@MainActor` because it reads
+    /// `photo.starRating` and `photo.isRejected`, which are isolated
+    /// to MainActor. The values-taking overload is nonisolated so it
+    /// can be called from `Task.detached`.
+    @MainActor
     static func writeXMPSidecar(for photo: Photo) throws {
         try writeXMPSidecar(
             url: photo.url,
@@ -123,7 +78,7 @@ enum MetadataService {
         )
     }
 
-    static func writeXMPSidecar(url: URL, starRating: Int, isRejected: Bool) throws {
+    nonisolated static func writeXMPSidecar(url: URL, starRating: Int, isRejected: Bool) throws {
         // Only write if there's something to save. No empty sidecars.
         guard starRating > 0 || isRejected else { return }
 
