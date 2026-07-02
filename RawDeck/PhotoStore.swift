@@ -728,17 +728,19 @@ final class PhotoStore: ObservableObject {
 
     // MARK: - Save ratings and eject
 
-    /// Track the most recent save-ratings operation's progress so the
-    /// status bar can show it. Resets to nil when the operation finishes.
-    @Published var saveProgress: SaveProgress? = nil
-
     /// Plain Sendable struct so we can publish save progress into
     /// `@Published` from `Task.detached` without tripping Swift 6
-    /// strict-concurrency warnings.
+    /// strict-concurrency warnings. Declared BEFORE the @Published
+    /// property below because Swift needs the type in scope at the
+    /// point of property declaration.
     struct SaveProgress: Sendable, Equatable {
         var done: Int
         var total: Int
     }
+
+    /// Track the most recent save-ratings operation's progress so the
+    /// status bar can show it. Resets to nil when the operation finishes.
+    @Published var saveProgress: SaveProgress? = nil
 
     /// Write a sidecar XMP file next to every photo that has a rating
     /// or reject flag, then (optionally) eject the volume. Shows a
