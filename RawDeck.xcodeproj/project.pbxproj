@@ -32,6 +32,7 @@
 			A1000023 /* CoachingDelta.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000023 /* CoachingDelta.swift */; };
 			A1000024 /* CPUDeltaRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000024 /* CPUDeltaRenderer.swift */; };
 		A1000025 /* ExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000025 /* ExportService.swift */; };
+		A1000026 /* MetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000026 /* MetadataService.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -60,6 +61,7 @@
 			B1000023 /* CoachingDelta.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CoachingDelta.swift; sourceTree = "<group>"; };
 		B1000024 /* CPUDeltaRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CPUDeltaRenderer.swift; sourceTree = "<group>"; };
 		B1000025 /* ExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportService.swift; sourceTree = "<group>"; };
+		B1000026 /* MetadataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetadataService.swift; sourceTree = "<group>"; };
 		B2000001 /* RawDeck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RawDeck.app; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
@@ -135,6 +137,7 @@
 			B1000010 /* ImportService.swift */,
 			B1000011 /* ExternalAppService.swift */,
 			B1000025 /* ExportService.swift */,
+			B1000026 /* MetadataService.swift */,
 		);
 		path = Services;
 		sourceTree = "<group>";
@@ -256,6 +259,7 @@
 					A1000023 /* CoachingDelta.swift in Sources */,
 				A1000024 /* CPUDeltaRenderer.swift in Sources */,
 				A1000025 /* ExportService.swift in Sources */,
+				A1000026 /* MetadataService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

@@ -56,7 +56,9 @@ struct RawDeckApp: App {
 
                 ExportCommand(store: store)
 
-                Divider()
+                                SaveRatingsCommand(store: store)
+
+                                Divider()
 
                 Button("Select All") {
                     store.selectAll()
@@ -144,6 +146,52 @@ struct ExportCommand: View {
         .keyboardShortcut("e", modifiers: [.command, .option])
         .disabled(store.mode != .library || store.photos.isEmpty)
         .help("Copy selected photos to a folder of your choice, preserving the original .cr3 / .nef / .arw / .dng bytes (no re-encoding)")
+    }
+}
+
+/// Save Ratings & Eject menu command. Writes XMP sidecars next to
+/// every photo with a rating/reject flag, then asks the user to
+/// confirm before ejecting the volume so they can remove the SD card.
+///
+/// Sidecars are placed alongside the original .cr3 (e.g.
+/// `IMG_1234.CR3` → `IMG_1234.xmp`) and use the standard XMP
+/// `xmp:Rating` and `xmp:Reject` tags that every RAW-aware app
+/// (Lightroom, Apple Photos, Photo Mechanic, Capture One) reads on
+/// import — so when the user re-inserts the card, their ratings
+/// carry over without modifying the original RAW bytes.
+struct SaveRatingsCommand: View {
+    @ObservedObject var store: PhotoStore
+    /// Pending eject confirmation: non-nil while the alert is showing.
+    /// The value is the closure that, when invoked with `true`, runs
+    /// the actual save-and-eject.
+    @State private var pendingConfirmation: ((Bool) -> Void)? = nil
+
+    var body: some View {
+        Button("Save Ratings & Eject…") {
+            store.saveRatingsAndEject { proceed in
+                // Stash the decision callback in @State so the alert
+                // can fire it when the user clicks Save / Cancel.
+                pendingConfirmation = proceed
+            }
+        }
+        .keyboardShortcut("s", modifiers: .command)
+        .disabled(store.mode != .library || store.photos.isEmpty)
+        .help("Write your star ratings and reject flags as .xmp sidecars (Lightroom/Photos/Photo Mechanic compatible), then eject the SD card so you can remove it safely")
+        .alert("Save ratings and eject?", isPresented: Binding(
+            get: { pendingConfirmation != nil },
+            set: { if !$0 { pendingConfirmation = nil } }
+        )) {
+            Button("Save & Eject", role: .destructive) {
+                pendingConfirmation?(true)
+                pendingConfirmation = nil
+            }
+            Button("Cancel", role: .cancel) {
+                pendingConfirmation?(false)
+                pendingConfirmation = nil
+            }
+        } message: {
+            Text("This writes .xmp sidecar files next to every rated photo, then ejects the card volume. The original RAW files are not modified.")
+        }
     }
 }
 
