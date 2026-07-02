@@ -180,7 +180,6 @@ final class PhotoStore: ObservableObject {
             self.loadingProgress = (0, urls.count)
             self.isLoading = false
         }
-    }
 
     // MARK: - Thumbnails
 
@@ -726,6 +725,7 @@ final class PhotoStore: ObservableObject {
         }
     }
 
+    }
     // MARK: - Save ratings and eject
 
     /// Plain Sendable struct so we can publish save progress into
