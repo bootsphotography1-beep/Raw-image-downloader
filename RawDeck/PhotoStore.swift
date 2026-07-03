@@ -286,7 +286,7 @@ final class PhotoStore: ObservableObject {
     private static func decodeOneThumbnail(photo: Photo, owner: PhotoStore?) async {
         let id = photo.id
         let url = photo.url
-        let wrapped = Task.detached(priority: .userInitiated) {
+        let wrapped = await Task.detached(priority: .userInitiated) {
             // Returns NSImage? — may be nil if every fallback path failed.
             // generateThumbnail has its own fallback chain (QL → smaller
             // QL → embedded JPEG extraction) and only returns nil if
@@ -773,7 +773,8 @@ final class PhotoStore: ObservableObject {
         // Ask the view layer to confirm before we eject. The closure
         // runs synchronously, but the actual decision is async via the
         // inner `proceed` callback.
-        confirmEject { proceed in
+        confirmEject { [weak self] proceed in
+            guard let self = self else { return }
             guard proceed else { return }
             // Begin the save. Show progress in the status bar.
             self.saveProgress = SaveProgress(done: 0, total: total)
