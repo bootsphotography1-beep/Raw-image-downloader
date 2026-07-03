@@ -4,15 +4,36 @@ import AppKit
 @main
 struct RawDeckApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    @StateObject private var store = PhotoStore()
-    @StateObject private var colorwayParser = ColorwayParserModel()
+
+    // IMPORTANT: do NOT use `@StateObject` here. `@StateObject`'s
+    // `wrappedValue` can only be safely read from inside a `View`'s
+    // body — accessing it from `App.init()` or any other non-View
+    // context (including `.commands { ... }` modifiers and the
+    // `@NSApplicationDelegateAdaptor` callback chain) generates a
+    // NEW `PhotoStore` instance on each read:
+    //
+    //     Accessing StateObject<PhotoStore>'s object without being
+    //     installed on a View. This will create a new instance
+    //     each time.
+    //
+    // The result is two stores coexisting: one bound to the UI
+    // (where you star photos), and a *different* one held by
+    // `AppDelegate.sharedStore` (which sees dirty=0 because it's a
+    // blank instance). The quit prompt never fires, and the toolbar's
+    // "Write Stars" button looks broken because the AppDelegate
+    // store can't see what you clicked.
+    //
+    // A plain `let` reference is created once at App initialization
+    // and is shared by reference everywhere it's referenced. This is
+    // exactly what we want for an app-lifetime singleton store.
+    private let store = PhotoStore()
+    private let colorwayParser = ColorwayParserModel()
 
     init() {
-        // Wire the store into the AppDelegate via a static property
-        // so applicationShouldTerminate can show the "Save star
-        // rating changes?" prompt at quit time. The previous
-        // approach assigned to appDelegate.store directly, which
-        // races with the @NSApplicationDelegateAdaptor lifecycle.
+        // Wire the singleton store into the AppDelegate BEFORE any
+        // body evaluation. Reading `store` here just dereferences the
+        // stored property — no `@StateObject` machinery involved —
+        // so we get the same instance the SwiftUI scene will use.
         AppDelegate.sharedStore = store
     }
 
