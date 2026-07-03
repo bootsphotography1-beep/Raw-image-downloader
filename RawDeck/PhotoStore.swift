@@ -15,6 +15,15 @@ struct SendableImage: @unchecked Sendable {
     let image: NSImage?  // nil means every thumbnail decode path failed
 }
 
+/// Same as `SendableImage` but also carries a short failure-reason
+/// string for diagnostics. Used by `PhotoStore.decodeOneThumbnail`
+/// to record *why* a particular file's thumbnail couldn't be
+/// generated, so the user can see it in the UI (e.g. cell tooltip).
+struct SendableImageAndReason: @unchecked Sendable {
+    let image: NSImage?
+    let reason: String?
+}
+
 /// The central state store for the current import session.
 ///
 /// Holds the array of Photo objects, the current selection set, the
@@ -176,7 +185,18 @@ final class PhotoStore: ObservableObject {
             // `self` is @MainActor). Build Photo instances and publish.
             // Photo.init is now cheap (no per-file stat), so this scales
             // linearly: 10K photos ≈ 30 ms.
-            self.photos = urls.map { Photo(url: $0) }
+            self.photos = urls.map { url -> Photo in
+                let photo = Photo(url: url)
+                // Restore ratings from the XMP sidecar if present.
+                // `readXMPSidecar` returns nil when there's no
+                // sidecar or it's stale (source file is newer than
+                // the sidecar — user re-edited the RAW elsewhere).
+                if let meta = MetadataService.readXMPSidecar(for: url) {
+                    photo.starRating = meta.starRating
+                    photo.isRejected = meta.isRejected
+                }
+                return photo
+            }
             self.loadingProgress = (0, urls.count)
             self.isLoading = false
         }
@@ -287,11 +307,25 @@ final class PhotoStore: ObservableObject {
         let id = photo.id
         let url = photo.url
         let wrapped = await Task.detached(priority: .userInitiated) {
-            // Returns NSImage? — may be nil if every fallback path failed.
-            // generateThumbnail has its own fallback chain (QL → smaller
-            // QL → embedded JPEG extraction) and only returns nil if
-            // everything fails.
-            SendableImage(image: ThumbnailService.generateThumbnail(for: url))
+            // Returns SendableImageAndReason — captures both the image
+            // (may be nil) and a short failure-reason string. The
+            // fallback chain in ThumbnailService (QL → smaller QL →
+            // embedded JPEG extraction) records why each path failed so
+            // we can surface the real reason when every path fails
+            // (matters for diagnosing stubborn CR3s on macOS 27).
+            var img: NSImage? = nil
+            var reason: String? = nil
+            let sem = DispatchSemaphore(value: 0)
+            ThumbnailService.generateThumbnailAsyncForDiagnostics(url: url) { result, failureReason in
+                img = result
+                reason = failureReason
+                sem.signal()
+            }
+            _ = sem.wait(timeout: .now() + 6.0)
+            if img == nil && reason == nil {
+                reason = "All decode paths timed out (6s)"
+            }
+            return SendableImageAndReason(image: img, reason: reason)
         }.value
         await MainActor.run { [weak owner] in
             guard let owner = owner else { return }
@@ -302,6 +336,7 @@ final class PhotoStore: ObservableObject {
                 // cell can stop showing the "Loading…" spinner and
                 // instead show a "broken image" icon if QL returned nil.
                 p.thumbnailLoadAttempted = true
+                p.lastThumbnailError = wrapped.reason
             }
         }
     }

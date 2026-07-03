@@ -36,6 +36,12 @@ final class Photo: Identifiable, ObservableObject {
     /// load" so the cell can show a "broken image" icon instead of a
     /// permanent spinner.
     @Published var thumbnailLoadAttempted: Bool = false
+    /// If `thumbnailLoadAttempted` is true and `thumbnail` is nil,
+    /// this string explains the last failure so the user can see
+    /// why a particular image isn't loading. Set by
+    /// `PhotoStore.decodeOneThumbnail`. Useful when debugging CR3
+    /// files that fail every decode path.
+    @Published var lastThumbnailError: String? = nil
 
     init(url: URL) {
         self.url = url

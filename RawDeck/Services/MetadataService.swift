@@ -44,6 +44,102 @@ enum MetadataService {
         var hasContent: Bool { writtenCount > 0 }
     }
 
+    // MARK: - XMP reading
+
+    /// Parsed XMP sidecar contents. Used to recover ratings when a
+    /// folder is re-imported (e.g. after ejecting the SD card and
+    /// reinserting it). Mirrors the values written by
+    /// `makeXMPContent`.
+    struct SidecarMetadata: Equatable {
+        var starRating: Int = 0   // 0–5, 0 = unrated
+        var isRejected: Bool = false
+    }
+
+    /// Read the XMP sidecar for a given photo URL, if one exists and
+    /// is valid. Returns nil if there's no sidecar or it can't be
+    /// parsed. Never throws — sidecar read failures should be
+    /// non-fatal during import.
+    ///
+    /// **Mtime handling**: if the source file's modification time is
+    /// newer than the sidecar's, we ignore the sidecar (the user may
+    /// have re-edited the RAW in another app and the old rating is
+    /// stale). This protects against stale ratings surfacing after
+    /// the user has reworked a shoot.
+    static func readXMPSidecar(for photoURL: URL) -> SidecarMetadata? {
+        let sidecar = sidecarURL(for: photoURL)
+
+        // Quick existence check — FileManager.fileExists is much
+        // cheaper than reading the file then discovering it's empty.
+        guard FileManager.default.fileExists(atPath: sidecar.path) else {
+            return nil
+        }
+
+        // Mtime guard: if the source is newer than the sidecar, the
+        // sidecar is stale (user re-edited the RAW elsewhere). Skip.
+        if let srcMtime = mtimeOfFile(at: photoURL),
+           let sidecarMtime = mtimeOfFile(at: sidecar),
+           srcMtime > sidecarMtime {
+            return nil
+        }
+
+        guard let data = try? Data(contentsOf: sidecar),
+              let text = String(data: data, encoding: .utf8) else {
+            return nil
+        }
+
+        return parseXMP(text)
+    }
+
+    /// Cheap mtime read for the mtime guard. Returns nil on any I/O
+    /// error so we fall through to parsing the XMP anyway (better to
+    /// show a slightly-stale rating than none).
+    private static func mtimeOfFile(at url: URL) -> Date? {
+        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
+        return attrs?[.modificationDate] as? Date
+    }
+
+    /// Parse the small subset of XMP we care about: `xmp:Rating`,
+    /// `xmp:Reject`. Tolerant of missing/wrong types — returns
+    /// `SidecarMetadata` with whatever fields could be extracted.
+    ///
+    /// Implementation: simple regex over the XML text. XMP uses
+    /// fixed attribute names and the values are either digits or
+    /// "True"/"False", so a regex-based parser is sufficient here
+    /// and avoids pulling in NSXMLParser (which is heavier and not
+    /// needed for this scope).
+    private static func parseXMP(_ text: String) -> SidecarMetadata? {
+        var result = SidecarMetadata()
+
+        // xmp:Rating="N" (1-5) or "0" for unrated, "-1" for rejected
+        if let ratingRange = text.range(
+            of: #"xmp:Rating\s*=\s*"-?\d+""#,
+            options: .regularExpression
+        ) {
+            let match = text[ratingRange]
+            if let num = match.components(separatedBy: CharacterSet.decimalDigits.inverted)
+                .compactMap({ Int($0) }).first {
+                result.starRating = max(0, min(5, abs(num)))
+            }
+        }
+
+        // xmp:Reject="True" or "False"
+        if let rejectRange = text.range(
+            of: #"xmp:Reject\s*=\s*"(True|False|true|false|1|0)""#,
+            options: .regularExpression
+        ) {
+            let match = text[rejectRange]
+            let lower = match.lowercased()
+            result.isRejected = lower.contains("true") || lower.contains("\"1\"")
+        }
+
+        // If we found nothing usable, return nil so the caller
+        // doesn't think we got valid data.
+        guard result.starRating > 0 || result.isRejected else {
+            return nil
+        }
+        return result
+    }
+
     // MARK: - XMP writing
 
     /// Generate the XMP sidecar file URL for a given photo. The

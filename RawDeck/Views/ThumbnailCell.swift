@@ -31,7 +31,9 @@ struct ThumbnailCell: View {
                         // Decode failed (QL returned nil + embedded-JPEG
                         // fallback also failed). Show a recognizable
                         // placeholder so the user knows the cell isn't
-                        // just slow to load.
+                        // just slow to load. Tooltip surfaces the
+                        // diagnostic reason so the user can see *why*
+                        // (useful for stubborn CR3 files on macOS 27).
                         VStack(spacing: RDSpace.xs) {
                             Image(systemName: "photo.badge.exclamationmark")
                                 .font(.title)
@@ -40,6 +42,7 @@ struct ThumbnailCell: View {
                                 .font(RDType.caption)
                                 .foregroundStyle(RDColor.textSecondary)
                         }
+                        .help(photo.lastThumbnailError ?? "Thumbnail generation failed")
                     } else {
                         // Still loading — show the spinner.
                         VStack {
