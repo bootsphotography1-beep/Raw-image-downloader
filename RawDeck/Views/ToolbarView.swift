@@ -36,9 +36,7 @@ struct ToolbarView: View {
                 }
             }
 
-            // Sort menu — single dropdown button labelled with the current
-            // sort. Clicking opens a menu with the three sort options.
-            // The currently-active one has a checkmark next to it.
+            // Sort menu
             Menu {
                 ForEach(SortMode.allCases) { mode in
                     Button {
@@ -60,9 +58,7 @@ struct ToolbarView: View {
 
             Spacer()
 
-            // Star count badges — show the TOTAL count of photos at each
-            // rating (not filtered). Helps the user see at a glance how
-            // many 5-stars they've rated in the whole session.
+            // Star count badges
             HStack(spacing: RDSpace.s) {
                 ForEach(1...5, id: \.self) { i in
                     let n = store.count(rating: i)
@@ -127,6 +123,34 @@ struct ToolbarView: View {
             }
             .disabled(store.photos.isEmpty)
             .help("Copy selected photos to a folder of your choice, preserving the original .cr3 / .nef / .arw / .dng bytes (no re-encoding)")
+
+            Button {
+                store.writeRatingsToMetadata { written, failed, firstError in
+                    var lines: [String] = []
+                    let plural = (written + failed) == 1 ? "" : "s"
+                    lines.append("Saved \(written) of \(written + failed) rating\(plural) as XMP sidecars.")
+                    if failed > 0 {
+                        lines.append("\(failed) failed.")
+                        if let err = firstError {
+                            lines.append("First error: \(err)")
+                        }
+                    }
+                    if written > 0 && failed == 0 {
+                        lines.append("\nYour ratings are safe \u2014 you can quit the app, eject the card, or keep working.")
+                    }
+                    store.alertMessage = lines.joined(separator: "\n")
+                }
+            } label: {
+                if store.hasUnsavedRatings {
+                    Label("Write Stars (\(store.dirtyPhotoIDs.count))", systemImage: "square.and.arrow.down")
+                } else {
+                    Label("Write Stars", systemImage: "checkmark.circle")
+                }
+            }
+            .disabled(store.photos.isEmpty)
+            .help(store.hasUnsavedRatings
+                  ? "Save your current star ratings and reject flags to .xmp sidecars (Lightroom/Photos/Photo Mechanic compatible). Original RAW bytes are not modified."
+                  : "All current ratings are already saved to .xmp sidecars.")
 
             Button(role: .destructive) {
                 _ = store.trashSelection()

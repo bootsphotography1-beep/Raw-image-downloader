@@ -39,6 +39,29 @@ struct SendableImageAndReason: @unchecked Sendable {
 @MainActor
 final class PhotoStore: ObservableObject {
 
+    init() {
+        // Auto-save unsaved ratings when the app quits or the main
+        // window closes. We don't wait for the writes to complete
+        // before returning from the notification handler — macOS
+        // gives the app a brief grace period (a few hundred ms) to
+        // finish in-flight work before terminating, which is enough
+        // for typical session sizes (tens to low hundreds of sidecars).
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushDirtyRatings()
+        }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.flushDirtyRatings()
+        }
+    }
+
     /// Which top-level mode the app is in. The mode determines what
     /// the main content area shows and which keyboard shortcuts are
     /// active. Library mode is the default; Colorway Parser mode adds the
@@ -423,7 +446,12 @@ final class PhotoStore: ObservableObject {
             let sel = selectedPhotos
             return sel.isEmpty ? [] : sel
         }()
-        for p in targets { p.starRating = rating }
+        for p in targets {
+            if p.starRating != rating {
+                p.starRating = rating
+                dirtyPhotoIDs.insert(p.id)
+            }
+        }
     }
 
     func toggleReject(photo: Photo? = nil) {
@@ -432,7 +460,10 @@ final class PhotoStore: ObservableObject {
             let sel = selectedPhotos
             return sel.isEmpty ? [] : sel
         }()
-        for p in targets { p.isRejected.toggle() }
+        for p in targets {
+            p.isRejected.toggle()
+            dirtyPhotoIDs.insert(p.id)
+        }
     }
 
     // MARK: - Lightbox
@@ -792,66 +823,133 @@ final class PhotoStore: ObservableObject {
     /// caller can present an alert with a destructive action button —
     /// SwiftUI alert API doesn't compose well with `async` confirmation
     /// patterns.
-    func saveRatingsAndEject(confirmEject: @escaping (_ proceed: @escaping (Bool) -> Void) -> Void) {
-        // Snapshot the data we need onto the main actor before
-        // detaching, so the detached Task doesn't have to reach back
-        // into self for any actor-isolated state.
-        let photosToSave = photos.filter { $0.starRating > 0 || $0.isRejected }
-        let total = photosToSave.count
-        let folder = currentFolder
+    /// IDs of photos whose star rating or reject flag has changed
+    /// since the last successful write to metadata. Used by the
+    /// toolbar button (to show "Write Stars (N)") and by the
+    /// quit-time auto-save (to skip work when nothing is dirty).
+    @Published private(set) var dirtyPhotoIDs: Set<UUID> = []
 
+    /// True when there are unsaved rating changes. Drives the
+    /// toolbar button enabled state and the badge count.
+    var hasUnsavedRatings: Bool { !dirtyPhotoIDs.isEmpty }
+
+    /// Write the current star ratings and reject flags for every
+    /// rated photo (or every photo in `specificIDs` if provided)
+    /// as XMP sidecar files. The original RAW bytes are NEVER
+    /// touched — only new `.xmp` files are created. When the user
+    /// re-imports, Lightroom/Apple Photos/Photo Mechanic see the
+    /// ratings because they all read XMP sidecars.
+    ///
+    /// Runs the writes on a detached task so the UI stays
+    /// responsive. Updates `saveProgress` on MainActor for the
+    /// status bar. On completion, calls `completion` on the main
+    /// actor with (writtenCount, failedCount, firstErrorString).
+    /// On success, clears the matching IDs from `dirtyPhotoIDs`.
+    ///
+    /// Does NOT eject. For "save and eject" use `saveRatingsAndEject`.
+    func writeRatingsToMetadata(
+        specificIDs: Set<UUID>? = nil,
+        completion: ((Int, Int, String?) -> Void)? = nil
+    ) {
+        // Snapshot the photos we need to write. Filter to ones that
+        // actually have a rating or reject flag — no point writing
+        // empty sidecars for unrated photos.
+        let candidates: [Photo] = specificIDs.map { ids in
+            photos.filter { ids.contains($0.id) }
+        } ?? photos.filter { $0.starRating > 0 || $0.isRejected }
+
+        let total = candidates.count
         guard total > 0 else {
-            self.alertMessage = "No ratings to save. Star some photos first (1–5 keys, or X to reject)."
+            completion?(0, 0, nil)
             return
         }
 
-        // Ask the view layer to confirm before we eject. The closure
-        // runs synchronously, but the actual decision is async via the
-        // inner `proceed` callback.
+        // Snapshot photo fields to Sendable values before detaching.
+        let snapshot: [(id: UUID, url: URL, starRating: Int, isRejected: Bool)] =
+            candidates.map { ($0.id, $0.url, $0.starRating, $0.isRejected) }
+
+        // Show progress in the status bar.
+        self.saveProgress = SaveProgress(done: 0, total: total)
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            var written = 0
+            var failed = 0
+            var firstError: String? = nil
+            var succeededIDs: [UUID] = []
+
+            for (idx, snap) in snapshot.enumerated() {
+                do {
+                    try MetadataService.writeXMPSidecar(
+                        url: snap.url,
+                        starRating: snap.starRating,
+                        isRejected: snap.isRejected
+                    )
+                    written += 1
+                    succeededIDs.append(snap.id)
+                } catch {
+                    failed += 1
+                    if firstError == nil {
+                        firstError = "\(snap.url.lastPathComponent): \(error.localizedDescription)"
+                    }
+                    NSLog("RawDeck: sidecar write failed for \(snap.url.lastPathComponent): \(error)")
+                }
+                let done = idx + 1
+                if done % 10 == 0 || done == total {
+                    await MainActor.run { [weak self] in
+                        self?.saveProgress = SaveProgress(done: done, total: total)
+                    }
+                }
+            }
+
+            // Hand the result back on MainActor. Clear the dirty
+            // flag for photos that wrote successfully — failed ones
+            // stay dirty so the user can retry.
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.saveProgress = nil
+                for id in succeededIDs {
+                    self.dirtyPhotoIDs.remove(id)
+                }
+                completion?(written, failed, firstError)
+            }
+        }
+    }
+
+    /// Flush all unsaved ratings to XMP sidecars silently. Used at
+    /// app-quit time by the NotificationCenter observer. Kicks off
+    /// the async write and returns immediately — we don't wait for
+    /// it to finish, but the writes are fast (<1s for typical
+    /// sessions) and the OS will flush them before terminating the
+    /// process if we get the call in early enough.
+    func flushDirtyRatings() {
+        guard hasUnsavedRatings else { return }
+        let dirtyIDs = dirtyPhotoIDs
+        writeRatingsToMetadata(specificIDs: dirtyIDs) { _, _, _ in
+            // No completion handler — silent.
+        }
+    }
+
+    /// Save ratings to XMP sidecars AND eject the SD card volume.
+    /// Wraps `writeRatingsToMetadata` with a confirmation alert
+    /// and a post-write eject. The original RAW bytes are NEVER
+    /// touched — only new `.xmp` files are created.
+    ///
+    /// `confirmEject` is a closure (rather than a parameter) so the
+    /// caller can present an alert with a destructive action button.
+    func saveRatingsAndEject(confirmEject: @escaping (_ proceed: @escaping (Bool) -> Void) -> Void) {
+        guard hasUnsavedRatings else {
+            self.alertMessage = "No ratings to save. Star some photos first (1-5 keys, or X to reject)."
+            return
+        }
+
+        let folder = currentFolder
+
         confirmEject { [weak self] proceed in
             guard let self = self else { return }
             guard proceed else { return }
-            // Begin the save. Show progress in the status bar.
-            self.saveProgress = SaveProgress(done: 0, total: total)
 
-            // Snapshot the photo fields into a Sendable tuple. Photo is
-            // @MainActor, so we read its fields on this (main-actor)
-            // task before detaching, and pass plain values across.
-            let snapshot: [(url: URL, starRating: Int, isRejected: Bool)] = photosToSave.map {
-                ($0.url, $0.starRating, $0.isRejected)
-            }
-
-            Task.detached(priority: .userInitiated) { [weak self] in
-                var written = 0
-                var failed = 0
-                var firstError: String? = nil
-                for (idx, snap) in snapshot.enumerated() {
-                    do {
-                        try MetadataService.writeXMPSidecar(
-                            url: snap.url,
-                            starRating: snap.starRating,
-                            isRejected: snap.isRejected
-                        )
-                        written += 1
-                    } catch {
-                        failed += 1
-                        if firstError == nil {
-                            firstError = "\(snap.url.lastPathComponent): \(error.localizedDescription)"
-                        }
-                        NSLog("RawDeck: sidecar write failed for \(snap.url.lastPathComponent): \(error)")
-                    }
-                    let done = idx + 1
-                    if done % 10 == 0 || done == total {
-                        await MainActor.run { [weak self] in
-                            self?.saveProgress = SaveProgress(done: done, total: total)
-                        }
-                    }
-                }
-
-                // Eject after writing if we have a folder. Compute as a
-                // single Result value so Swift 6 strict-concurrency doesn't
-                // complain about capturing mutable vars across the
-                // Task.detached / MainActor.run boundary below.
+            self.writeRatingsToMetadata { written, failed, firstError in
+                // Eject after writing if we have a folder.
                 let ejectOutcome: Result<Void, Error> = {
                     guard let folder = folder else { return .success(()) }
                     do {
@@ -862,9 +960,6 @@ final class PhotoStore: ObservableObject {
                     }
                 }()
 
-                let writtenFinal = written
-                let failedFinal = failed
-                let firstErrorFinal = firstError
                 let ejected: Bool
                 let ejectError: String?
                 switch ejectOutcome {
@@ -875,31 +970,29 @@ final class PhotoStore: ObservableObject {
                     ejected = false
                     ejectError = err.localizedDescription
                 }
-                await MainActor.run { [weak self] in
-                    guard let self = self else { return }
-                    self.saveProgress = nil
-                    var lines: [String] = []
-                    let plural = total == 1 ? "" : "s"
-                    lines.append("Saved \(writtenFinal) of \(total) rating\(plural) as XMP sidecars.")
-                    if failedFinal > 0 {
-                        lines.append("\(failedFinal) failed.")
-                        if let err = firstErrorFinal {
-                            lines.append("First error: \(err)")
-                        }
+
+                var lines: [String] = []
+                let plural = (written + failed) == 1 ? "" : "s"
+                lines.append("Saved \(written) of \(written + failed) rating\(plural) as XMP sidecars.")
+                if failed > 0 {
+                    lines.append("\(failed) failed.")
+                    if let err = firstError {
+                        lines.append("First error: \(err)")
                     }
-                    if ejected {
-                        lines.append("\nVolume ejected — you can safely remove the card.")
-                    } else if let err = ejectError {
-                        lines.append("\nEject failed: \(err)")
-                        lines.append("The sidecars were still saved — you can eject manually in Finder.")
-                    } else {
-                        lines.append("\nSidecars saved next to each photo.")
-                    }
-                    self.alertMessage = lines.joined(separator: "\n")
                 }
+                if ejected {
+                    lines.append("\nVolume ejected — you can safely remove the card.")
+                } else if let err = ejectError {
+                    lines.append("\nEject failed: \(err)")
+                    lines.append("The sidecars were still saved — you can eject manually in Finder.")
+                } else {
+                    lines.append("\nSidecars saved next to each photo.")
+                }
+                self.alertMessage = lines.joined(separator: "\n")
             }
         }
     }
+
 }
 
 // MARK: - SortMode
