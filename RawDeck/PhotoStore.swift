@@ -12,7 +12,7 @@ import Combine
 /// automatically), but the deployment target is 13.0 so we need this shim
 /// for the foreseeable future.
 struct SendableImage: @unchecked Sendable {
-    let image: NSImage
+    let image: NSImage?  // nil means every thumbnail decode path failed
 }
 
 /// The central state store for the current import session.
@@ -286,7 +286,7 @@ final class PhotoStore: ObservableObject {
     private static func decodeOneThumbnail(photo: Photo, owner: PhotoStore?) async {
         let id = photo.id
         let url = photo.url
-        let wrapped = await Task.detached(priority: .userInitiated) {
+        let wrapped = Task.detached(priority: .userInitiated) {
             // Returns NSImage? — may be nil if every fallback path failed.
             // generateThumbnail has its own fallback chain (QL → smaller
             // QL → embedded JPEG extraction) and only returns nil if
@@ -812,21 +812,33 @@ final class PhotoStore: ObservableObject {
                     }
                 }
 
-                // Eject after writing if we have a folder.
-                var ejected = false
-                var ejectError: String? = nil
-                if let folder = folder {
+                // Eject after writing if we have a folder. Compute as a
+                // single Result value so Swift 6 strict-concurrency doesn't
+                // complain about capturing mutable vars across the
+                // Task.detached / MainActor.run boundary below.
+                let ejectOutcome: Result<Void, Error> = {
+                    guard let folder = folder else { return .success(()) }
                     do {
                         try MetadataService.ejectVolume(containing: folder)
-                        ejected = true
+                        return .success(())
                     } catch {
-                        ejectError = error.localizedDescription
+                        return .failure(error)
                     }
-                }
+                }()
 
                 let writtenFinal = written
                 let failedFinal = failed
                 let firstErrorFinal = firstError
+                let ejected: Bool
+                let ejectError: String?
+                switch ejectOutcome {
+                case .success:
+                    ejected = true
+                    ejectError = nil
+                case .failure(let err):
+                    ejected = false
+                    ejectError = err.localizedDescription
+                }
                 await MainActor.run { [weak self] in
                     guard let self = self else { return }
                     self.saveProgress = nil
