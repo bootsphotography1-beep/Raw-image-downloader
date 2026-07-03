@@ -136,7 +136,7 @@ struct ToolbarView: View {
                         }
                     }
                     if written > 0 && failed == 0 {
-                        lines.append("\nYour ratings are safe \u2014 you can quit the app, eject the card, or keep working.")
+                        lines.append("\nYour ratings are safe — you can quit the app, eject the card, or keep working.")
                     }
                     store.alertMessage = lines.joined(separator: "\n")
                 }
