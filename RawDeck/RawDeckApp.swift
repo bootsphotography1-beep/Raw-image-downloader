@@ -8,11 +8,12 @@ struct RawDeckApp: App {
     @StateObject private var colorwayParser = ColorwayParserModel()
 
     init() {
-        // Wire the store into the AppDelegate so applicationShouldTerminate
-        // can show the "Save star rating changes?" prompt at quit time.
-        // The delegate is created by @NSApplicationDelegateAdaptor before
-        // `init` runs, so appDelegate is already valid here.
-        appDelegate.store = store
+        // Wire the store into the AppDelegate via a static property
+        // so applicationShouldTerminate can show the "Save star
+        // rating changes?" prompt at quit time. The previous
+        // approach assigned to appDelegate.store directly, which
+        // races with the @NSApplicationDelegateAdaptor lifecycle.
+        AppDelegate.sharedStore = store
     }
 
     var body: some Scene {
@@ -240,17 +241,24 @@ struct HiddenKeyButton: View {
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 
-    /// Weak reference set by RawDeckApp.init(). The AppDelegate
-    /// outlives the SwiftUI app on quit (it's a top-level NSApplication
-    /// delegate), so we use weak to avoid a retain cycle that would
-    /// prevent dealloc.
-    weak var store: PhotoStore?
+    /// Static reference set by RawDeckApp.init(). The SwiftUI App
+    /// adapter (`@NSApplicationDelegateAdaptor`) creates the
+    /// AppDelegate BEFORE the SwiftUI App struct initializes, but
+    /// accessing it via the wrapper during the App's init() is
+    /// fragile across Xcode versions. A static lets us share the
+    /// store reference without that race.
+    static var sharedStore: PhotoStore?
 
     /// True while a quit prompt is on screen. Used to suppress
     /// re-entrancy if Cmd-Q is hit twice.
     private var isPrompting = false
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Static lookup — robust to wrapper timing issues.
+        let store = Self.sharedStore
+
+        NSLog("RawDeck: applicationShouldTerminate called; store=\(store != nil); dirty=\(store?.dirtyPhotoIDs.count ?? -1)")
+
         // No store yet (very early in app lifecycle) or no dirty
         // ratings — just let the app quit.
         guard let store = store, store.hasUnsavedRatings else {

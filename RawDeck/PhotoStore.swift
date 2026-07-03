@@ -257,6 +257,128 @@ final class PhotoStore: ObservableObject {
             self.loadingProgress = (0, urls.count)
             self.isLoading = false
         }
+
+        // Kick off the eager thumbnail decode for the whole import.
+        // This runs in parallel with whatever the user does next
+        // (scrolling, rating, etc.) and surfaces a top-bar progress
+        // indicator with an ETA. Without this, cells rely on
+        // .onAppear to trigger loads — and if .onAppear fired
+        // before isLoading was cleared (a SwiftUI timing quirk),
+        // the cell would stay stuck on "Loading..." forever.
+        startEagerThumbnailImport()
+    }
+
+    /// Eagerly decode every photo's thumbnail. Runs as a detached
+    /// task so it doesn't block MainActor. Updates `importProgress`
+    /// as it goes. Decodes happen in serial (one at a time) to
+    /// bound memory — each CR3 decode allocates ~96 MB of CGImage,
+    /// and 2-4 parallel decodes is enough to stall the system.
+    /// Cold-cache CR3s take 5-25s each, so a 226-photo import
+    /// takes 20-90 minutes if every file is cold. We surface a
+    /// top-bar progress indicator with an ETA so the user knows
+    /// it's making progress and isn't stuck.
+    ///
+    /// Photos whose .thumbnail is already non-nil (e.g. the user
+    /// had cached thumbnails, or the user re-imported an already-
+    /// imported folder) are skipped without bumping the counter,
+    /// so the ETA stays accurate.
+    ///
+    /// On every photo, regardless of whether decoding succeeded
+    /// or failed, the photo's `thumbnailLoadAttempted` is set to
+    /// true so its cell renders a final state instead of an
+    /// indefinite "Loading..." spinner. This is the key fix for
+    /// the "half loading, half aren't" bug.
+    private func startEagerThumbnailImport() {
+        importProgress = ImportProgress(done: 0, total: photos.count, etaSeconds: nil)
+        let startedAt = Date()
+
+        Task { [weak self] in
+            guard let self = self else { return }
+            // Snapshot the photo IDs upfront. If the user re-imports
+            // mid-decode, the new photos won't be in this list and
+            // we won't touch them — the new import will spawn its
+            // own startEagerThumbnailImport().
+            let snapshot = self.photos.map { $0.id }
+            let total = snapshot.count
+
+            // Process 2 photos in parallel via a TaskGroup. The
+            // single-task serial version was too slow for cold-cache
+            // CR3s (226 photos × ~10s = 38 min). 2 parallel halves
+            // that while still bounding memory (each decode ~96 MB).
+            await withTaskGroup(of: Void.self) { group in
+                var nextIdx = 0
+                var inFlight = 0
+                let maxParallel = 2
+
+                // Prime the pump.
+                while inFlight < maxParallel, nextIdx < snapshot.count {
+                    let id = snapshot[nextIdx]
+                    nextIdx += 1
+                    guard let photo = self.photos.first(where: { $0.id == id }) else {
+                        self.bumpImportProgress(done: nextIdx, total: total, startedAt: startedAt)
+                        continue
+                    }
+                    if photo.thumbnail != nil || self.thumbnailInFlight.contains(id) {
+                        self.bumpImportProgress(done: nextIdx, total: total, startedAt: startedAt)
+                        continue
+                    }
+                    self.thumbnailInFlight.insert(id)
+                    inFlight += 1
+                    group.addTask { [weak self] in
+                        await Self.decodeOneThumbnail(photo: photo, owner: self)
+                    }
+                }
+
+                // As each decode finishes, kick off the next.
+                while await group.next() != nil {
+                    inFlight -= 1
+                    if Task.isCancelled { break }
+                    // Bump done by 1 for the just-finished decode.
+                    let doneCount = nextIdx
+                    self.bumpImportProgress(done: doneCount, total: total, startedAt: startedAt)
+
+                    if nextIdx < snapshot.count {
+                        let id = snapshot[nextIdx]
+                        nextIdx += 1
+                        if let photo = self.photos.first(where: { $0.id == id }) {
+                            if photo.thumbnail == nil, !self.thumbnailInFlight.contains(id) {
+                                self.thumbnailInFlight.insert(id)
+                                inFlight += 1
+                                group.addTask { [weak self] in
+                                    await Self.decodeOneThumbnail(photo: photo, owner: self)
+                                }
+                            } else {
+                                // Skip — already loaded. Bump progress.
+                                let skippedDone = nextIdx
+                                self.bumpImportProgress(done: skippedDone, total: total, startedAt: startedAt)
+                            }
+                        } else {
+                            // Photo removed — skip.
+                            let skippedDone = nextIdx
+                            self.bumpImportProgress(done: skippedDone, total: total, startedAt: startedAt)
+                        }
+                    }
+                }
+            }
+
+            // Clear progress once done.
+            self.importProgress = nil
+        }
+    }
+
+    /// Update importProgress after each decode. Calculates ETA based
+    /// on rolling average time-per-decode. Skips ETA until we have
+    /// at least 5 decoded items (the first few are unrepresentative
+    /// because they include the one-time QL cache warmup).
+    private func bumpImportProgress(done: Int, total: Int, startedAt: Date) {
+        let elapsed = Date().timeIntervalSince(startedAt)
+        var eta: Double? = nil
+        if done >= 5 && elapsed > 0 {
+            let rate = Double(done) / elapsed
+            let remaining = total - done
+            eta = Double(remaining) / rate
+        }
+        importProgress = ImportProgress(done: done, total: total, etaSeconds: eta)
     }
 
     // MARK: - Thumbnails
@@ -295,7 +417,16 @@ final class PhotoStore: ObservableObject {
     ///   draw time, so we don't double the RAM cost by eagerly
     ///   materializing a 512-pixel thumbnail.
     func loadThumbnails(in range: Range<Int>) {
-        guard !isLoading else { return }
+        // NOTE: previously this had `guard !isLoading else { return }`
+        // because the early import implementation ran the folder
+        // enumeration on the main actor. With the off-main detached
+        // enumeration, photos can appear in the grid during the
+        // import (and cells' .onAppear fires) while isLoading is
+        // still true. The guard was suppressing those early .onAppear
+        // calls, leaving the cells in their "Loading..." state
+        // forever (because .onAppear doesn't refire after the
+        // condition clears). Now we always try to load — even during
+        // the import — and dedupe via `thumbnailInFlight`.
         let toLoad = photos[range].filter { $0.thumbnail == nil && !thumbnailInFlight.contains($0.id) }
         guard !toLoad.isEmpty else { return }
 
@@ -722,6 +853,24 @@ final class PhotoStore: ObservableObject {
     /// Track the most recent export operation's progress so the status
     /// bar can show it. Resets to nil when the export finishes.
     @Published var exportProgress: ExportProgress? = nil
+
+    /// Progress for the thumbnail-import phase that runs immediately
+    /// after a folder import completes. Unlike export/save progress
+    /// which are short-lived operations, thumbnail decoding can take
+    /// minutes for hundreds of cold-cache CR3s — so we surface a
+    /// top-bar progress indicator with an ETA.
+    ///
+    /// `done` = number of thumbnails decoded (success OR fail; either
+    /// way the cell has a final state). `total` is the number of
+    /// photos in the import. `etaSeconds` is the estimated seconds
+    /// remaining based on the rolling decode rate; nil while we
+    /// haven't decoded enough to estimate yet.
+    struct ImportProgress: Sendable, Equatable {
+        var done: Int
+        var total: Int
+        var etaSeconds: Double?
+    }
+    @Published var importProgress: ImportProgress? = nil
 
     /// Batch-export selected photos as their ORIGINAL files (no
     /// re-encoding) into a user-chosen destination folder. Shows an

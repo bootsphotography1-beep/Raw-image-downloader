@@ -88,6 +88,10 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 ToolbarView()
                 Divider()
+                if let prog = store.importProgress {
+                    ImportProgressBar(progress: prog)
+                    Divider()
+                }
                 FilterBarView()
                 Divider()
                 PhotoGridView()
@@ -255,5 +259,53 @@ struct StatusBarView: View {
                     .foregroundStyle(RDColor.textTertiary)
             }
         }
+    }
+}
+
+
+/// Top-of-grid progress strip showing how many thumbnails have been
+/// decoded so far during the import phase and an ETA for the
+/// remaining files. Visible only while `store.importProgress` is
+/// non-nil. Slim (28pt) so it doesn't dominate the layout.
+struct ImportProgressBar: View {
+    let progress: PhotoStore.ImportProgress
+
+    private var fraction: Double {
+        guard progress.total > 0 else { return 0 }
+        return Double(progress.done) / Double(progress.total)
+    }
+
+    private var etaText: String {
+        guard let eta = progress.etaSeconds else { return "Estimating…" }
+        if eta < 60 { return "\(Int(eta))s remaining" }
+        if eta < 3600 {
+            let m = Int(eta / 60)
+            let s = Int(eta.truncatingRemainder(dividingBy: 60))
+            return "\(m)m \(s)s remaining"
+        }
+        let h = Int(eta / 3600)
+        let m = Int((eta.truncatingRemainder(dividingBy: 3600)) / 60)
+        return "\(h)h \(m)m remaining"
+    }
+
+    var body: some View {
+        HStack(spacing: RDSpace.m) {
+            ProgressView(value: fraction)
+                .progressViewStyle(.linear)
+                .tint(RDColor.accentPrimary)
+                .frame(maxWidth: 240)
+            Text("Importing thumbnails \(progress.done) / \(progress.total)")
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
+                .monospacedDigit()
+            Spacer()
+            Text(etaText)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, RDSpace.l)
+        .padding(.vertical, RDSpace.xs + 2)
+        .background(RDColor.surfaceRaised)
     }
 }
