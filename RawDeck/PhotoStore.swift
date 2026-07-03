@@ -53,35 +53,47 @@ struct SendableImageAndReason: @unchecked Sendable {
 final class PhotoStore: ObservableObject {
 
     init() {
-        // Auto-save unsaved ratings when the app quits or the main
-        // window closes. We don't wait for the writes to complete
-        // before returning from the notification handler — macOS
-        // gives the app a brief grace period (a few hundred ms) to
-        // finish in-flight work before terminating, which is enough
-        // for typical session sizes (tens to low hundreds of sidecars).
-        NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            // The closure isn't @MainActor isolated even though we
-            // pass queue: .main, so wrap the call in a MainActor Task
-            // to satisfy Swift 6 strict concurrency. flushDirtyRatings
-            // itself returns instantly (just kicks off a detached
-            // Task for the actual writes), so this is cheap.
-            Task { @MainActor [weak self] in
-                self?.flushDirtyRatings()
+        // The quit-time save prompt is wired in RawDeckApp.swift via
+        // NSApplicationDelegate.applicationShouldTerminate. We don't
+        // use NotificationCenter here because the async flush was
+        // racing with app termination — the writes were sometimes
+        // cut off mid-flight. The synchronous writeDirtyRatingsSync()
+        // method below is what the delegate calls when the user
+        // chooses "Save" in the quit prompt.
+    }
+
+    /// Synchronous variant of `flushDirtyRatings` for use from the
+    /// quit-time applicationShouldTerminate handler. Runs the XMP
+    /// writes on the current thread (caller is already on MainActor
+    /// during quit) and returns when every sidecar has been written
+    /// — so the OS doesn't kill the process mid-write.
+    ///
+    /// Returns (written, failed) so the caller can surface a final
+    /// status to the user. Errors per file are logged via NSLog;
+    /// failed photos stay in `dirtyPhotoIDs` (best we can do — if
+    /// quit is in progress we can't retry).
+    @discardableResult
+    func writeDirtyRatingsSync() -> (written: Int, failed: Int) {
+        guard hasUnsavedRatings else { return (0, 0) }
+        var written = 0
+        var failed = 0
+        for photo in photos {
+            guard dirtyPhotoIDs.contains(photo.id) else { continue }
+            guard photo.starRating > 0 || photo.isRejected else { continue }
+            do {
+                try MetadataService.writeXMPSidecar(
+                    url: photo.url,
+                    starRating: photo.starRating,
+                    isRejected: photo.isRejected
+                )
+                written += 1
+                dirtyPhotoIDs.remove(photo.id)
+            } catch {
+                failed += 1
+                NSLog("RawDeck: sync sidecar write failed for \(photo.url.lastPathComponent): \(error)")
             }
         }
-        NotificationCenter.default.addObserver(
-            forName: NSWindow.willCloseNotification,
-            object: nil,
-            queue: .main
-        ) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.flushDirtyRatings()
-            }
-        }
+        return (written, failed)
     }
 
     /// Which top-level mode the app is in. The mode determines what
@@ -362,10 +374,14 @@ final class PhotoStore: ObservableObject {
             group.addTask {
                 await ThumbnailService.generateThumbnailAsync(url: url)
             }
-            // Child 2: 6-second watchdog
+            // Child 2: 30-second watchdog. The earlier 6s value was too
+            // aggressive for cold-cache CR3s read from an SD card — QL
+            // can take 15-25s to decode a single uncached RAW on first
+            // access. 30s gives cold-cache files room to succeed while
+            // still guarding against a true hang.
             group.addTask {
-                try? await Task.sleep(nanoseconds: 6_000_000_000)
-                return SendableImageAndReason(image: nil, reason: "All decode paths timed out (6s)")
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                return SendableImageAndReason(image: nil, reason: "All decode paths timed out (30s)")
             }
             // Take whichever finishes first.
             let first = await group.next() ?? SendableImageAndReason(image: nil, reason: "Decode produced no result")

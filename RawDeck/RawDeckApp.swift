@@ -3,8 +3,17 @@ import AppKit
 
 @main
 struct RawDeckApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var store = PhotoStore()
     @StateObject private var colorwayParser = ColorwayParserModel()
+
+    init() {
+        // Wire the store into the AppDelegate so applicationShouldTerminate
+        // can show the "Save star rating changes?" prompt at quit time.
+        // The delegate is created by @NSApplicationDelegateAdaptor before
+        // `init` runs, so appDelegate is already valid here.
+        appDelegate.store = store
+    }
 
     var body: some Scene {
         Window("RawDeck", id: "main") {
@@ -210,5 +219,94 @@ struct HiddenKeyButton: View {
             .frame(width: 0, height: 0)
             .opacity(0)
             .accessibilityHidden(true)
+    }
+}
+
+
+// MARK: - AppDelegate
+//
+// Intercepts the quit event (Cmd-Q, system shutdown, last-window-
+// closed) so we can prompt the user before losing any unsaved
+// star ratings. The previous async flush via NotificationCenter was
+// racy: the writes were sometimes cut off mid-flight when the OS
+// terminated the process.
+//
+// We use the AppKit `applicationShouldTerminate` callback, which
+// is synchronous and runs BEFORE the OS kills the process. We
+// return `.terminateCancel` to pause the quit, show an NSAlert
+// with three buttons (Save / Don't Save / Cancel), then act on the
+// user's choice and return the appropriate NSApplication.TerminateReply.
+
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate {
+
+    /// Weak reference set by RawDeckApp.init(). The AppDelegate
+    /// outlives the SwiftUI app on quit (it's a top-level NSApplication
+    /// delegate), so we use weak to avoid a retain cycle that would
+    /// prevent dealloc.
+    weak var store: PhotoStore?
+
+    /// True while a quit prompt is on screen. Used to suppress
+    /// re-entrancy if Cmd-Q is hit twice.
+    private var isPrompting = false
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // No store yet (very early in app lifecycle) or no dirty
+        // ratings — just let the app quit.
+        guard let store = store, store.hasUnsavedRatings else {
+            return .terminateNow
+        }
+
+        // Re-entrancy guard. If the user hits Cmd-Q twice quickly,
+        // we don't want to stack alert dialogs.
+        guard !isPrompting else { return .terminateCancel }
+        isPrompting = true
+        defer { isPrompting = false }
+
+        let dirtyCount = store.dirtyPhotoIDs.count
+
+        let alert = NSAlert()
+        alert.messageText = "Save star rating changes?"
+        alert.informativeText = "You have \(dirtyCount) unsaved rating change\(dirtyCount == 1 ? "" : "s"). " +
+            "Choose Save to write .xmp sidecar files next to each rated photo before quitting. " +
+            "Choose Don't Save to discard the changes. " +
+            "Choose Cancel to return to RawDeck."
+        alert.alertStyle = .warning
+        // Default button = "Save" (Enter key), alternate = "Don't Save",
+        // cancel = "Cancel" (Escape key).
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Don't Save")
+        alert.addButton(withTitle: "Cancel")
+
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn:
+            // Save: synchronously write every dirty sidecar before
+            // returning. writeDirtyRatingsSync is @MainActor and
+            // blocks until done, so by the time we return .terminateNow
+            // the XMPs are flushed to disk.
+            let result = store.writeDirtyRatingsSync()
+            if result.failed > 0 {
+                let failAlert = NSAlert()
+                failAlert.messageText = "Some ratings failed to save"
+                failAlert.informativeText = "\(result.written) saved, \(result.failed) failed. " +
+                    "Check Console.app for RawDeck log entries to see which files failed."
+                failAlert.alertStyle = .warning
+                failAlert.addButton(withTitle: "Quit Anyway")
+                failAlert.addButton(withTitle: "Cancel")
+                if failAlert.runModal() == .alertSecondButtonReturn {
+                    return .terminateCancel
+                }
+            }
+            return .terminateNow
+        case .alertSecondButtonReturn:
+            // Don't Save: just quit.
+            return .terminateNow
+        case .alertThirdButtonReturn:
+            // Cancel: stay in the app.
+            return .terminateCancel
+        default:
+            return .terminateCancel
+        }
     }
 }
