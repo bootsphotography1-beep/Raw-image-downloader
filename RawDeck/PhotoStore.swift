@@ -2,6 +2,19 @@ import Foundation
 @preconcurrency import AppKit
 import Combine
 
+/// Mutable counter used inside Task.detached to accumulate write
+/// results across iterations. Required because Swift 6 strict
+/// concurrency rejects mutable `var` captures into concurrent
+/// closures; wrapping them in a reference type (with `@unchecked
+/// Sendable` since we manage access ourselves) lets multiple
+/// closures share the same counter safely.
+private final class WriteCounter: @unchecked Sendable {
+    var written: Int = 0
+    var failed: Int = 0
+    var firstError: String? = nil
+    var succeededIDs: [UUID] = []
+}
+
 /// Sendable wrapper for `NSImage` to allow it to cross actor boundaries
 /// (e.g. Task.detached) on macOS 13, where `NSImage` is not formally
 /// `Sendable`. `NSImage` is reference-counted and effectively immutable
@@ -51,14 +64,23 @@ final class PhotoStore: ObservableObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.flushDirtyRatings()
+            // The closure isn't @MainActor isolated even though we
+            // pass queue: .main, so wrap the call in a MainActor Task
+            // to satisfy Swift 6 strict concurrency. flushDirtyRatings
+            // itself returns instantly (just kicks off a detached
+            // Task for the actual writes), so this is cheap.
+            Task { @MainActor [weak self] in
+                self?.flushDirtyRatings()
+            }
         }
         NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.flushDirtyRatings()
+            Task { @MainActor [weak self] in
+                self?.flushDirtyRatings()
+            }
         }
     }
 
@@ -871,12 +893,13 @@ final class PhotoStore: ObservableObject {
         // Show progress in the status bar.
         self.saveProgress = SaveProgress(done: 0, total: total)
 
-        Task.detached(priority: .userInitiated) { [weak self] in
-            var written = 0
-            var failed = 0
-            var firstError: String? = nil
-            var succeededIDs: [UUID] = []
+        // Use a Counter class to hold the mutable write-results in a
+        // single Sendable reference, so the detached Task and the
+        // trailing MainActor.run can both touch them without Swift 6
+        // strict-concurrency rejecting the mutable-var capture.
+        let counter = WriteCounter()
 
+        Task.detached(priority: .userInitiated) { [weak self] in
             for (idx, snap) in snapshot.enumerated() {
                 do {
                     try MetadataService.writeXMPSidecar(
@@ -884,12 +907,12 @@ final class PhotoStore: ObservableObject {
                         starRating: snap.starRating,
                         isRejected: snap.isRejected
                     )
-                    written += 1
-                    succeededIDs.append(snap.id)
+                    counter.written += 1
+                    counter.succeededIDs.append(snap.id)
                 } catch {
-                    failed += 1
-                    if firstError == nil {
-                        firstError = "\(snap.url.lastPathComponent): \(error.localizedDescription)"
+                    counter.failed += 1
+                    if counter.firstError == nil {
+                        counter.firstError = "\(snap.url.lastPathComponent): \(error.localizedDescription)"
                     }
                     NSLog("RawDeck: sidecar write failed for \(snap.url.lastPathComponent): \(error)")
                 }
@@ -907,10 +930,10 @@ final class PhotoStore: ObservableObject {
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.saveProgress = nil
-                for id in succeededIDs {
+                for id in counter.succeededIDs {
                     self.dirtyPhotoIDs.remove(id)
                 }
-                completion?(written, failed, firstError)
+                completion?(counter.written, counter.failed, counter.firstError)
             }
         }
     }
