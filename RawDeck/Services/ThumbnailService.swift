@@ -179,8 +179,9 @@ enum ThumbnailService {
     /// delivered via the async function and assigned to `photo.preview`.
     static func generateFullPreview(for url: URL, maxDimension: CGFloat = 2400) async -> NSImage? {
         if isLikelyRAW(url) {
-            if let ciRaw = await generatePreviewViaCIRAW(url: url, maxDimension: maxDimension) {
-                return ciRaw
+            if let ciRaw = await generatePreviewViaCIRAW(url: url, maxDimension: maxDimension),
+               let img = ciRaw.image {
+                return img
             }
             // CIRAW refused — fall through to QL.
         }
@@ -208,12 +209,12 @@ enum ThumbnailService {
     /// Cost: 100–400ms per photo on a recent Mac (M-series). Memory
     /// usage peaks at ~150MB for a 24MP RAW during demosaic, then
     /// drops to ~50MB for the output CGImage.
-    private static func generatePreviewViaCIRAW(url: URL, maxDimension: CGFloat) async -> NSImage? {
+    private static func generatePreviewViaCIRAW(url: URL, maxDimension: CGFloat) async -> SendableImage? {
         // CIRAWFilter exists on macOS 10.14+ but is best on 13+. The
         // generator must be created on a background thread (it's
         // synchronous and we want off-main work). Render happens on
         // an arbitrary CIContext (we use Metal-backed for speed).
-        return await Task.detached(priority: .userInitiated) { () -> NSImage? in
+        return await Task.detached(priority: .userInitiated) { () -> SendableImage? in
             guard let filter = CIFilter(imageURL: url) else {
                 return nil
             }
@@ -247,7 +248,7 @@ enum ThumbnailService {
             }
 
             let outSize = NSSize(width: scaled.extent.width, height: scaled.extent.height)
-            return NSImage(cgImage: cg, size: outSize)
+            return SendableImage(image: NSImage(cgImage: cg, size: outSize))
         }.value
     }
 
@@ -325,14 +326,12 @@ enum ThumbnailService {
             maxDimension: CGFloat = 512,
             handler: @escaping (NSImage?, String?) -> Void
         ) {
-            var firstReason: String? = nil
             // Path 1: standard QL
             generateThumbnailAsync(url: url, maxDimension: maxDimension) { img in
                 if let img = img {
                     handler(img, nil)
                     return
                 }
-                firstReason = "QL primary failed"
                 // Path 2: smaller QL (cold-cache workaround)
                 generateThumbnailAsync(url: url, maxDimension: 256) { img in
                     if let img = img {
@@ -372,5 +371,17 @@ enum ThumbnailService {
             "x3f",  // Sigma
         ]
         return rawExtensions.contains(ext)
+    }
+
+    /// Async wrapper around `generateThumbnailAsyncForDiagnostics`.
+    /// Returns a `SendableImageAndReason` (image + diagnostic string).
+    /// Used by `PhotoStore.decodeOneThumbnail` so it can race this
+    /// against a timeout via `withTaskGroup`.
+    static func generateThumbnailAsync(url: URL, maxDimension: CGFloat = 512) async -> SendableImageAndReason {
+        await withCheckedContinuation { (cont: CheckedContinuation<SendableImageAndReason, Never>) in
+            generateThumbnailAsyncForDiagnostics(url: url, maxDimension: maxDimension) { result, failureReason in
+                cont.resume(returning: SendableImageAndReason(image: SendableImage(image: result), reason: failureReason))
+            }
+        }
     }
 }

@@ -20,7 +20,7 @@ struct SendableImage: @unchecked Sendable {
 /// to record *why* a particular file's thumbnail couldn't be
 /// generated, so the user can see it in the UI (e.g. cell tooltip).
 struct SendableImageAndReason: @unchecked Sendable {
-    let image: NSImage?
+    let image: SendableImage?
     let reason: String?
 }
 
@@ -306,32 +306,32 @@ final class PhotoStore: ObservableObject {
     private static func decodeOneThumbnail(photo: Photo, owner: PhotoStore?) async {
         let id = photo.id
         let url = photo.url
-        let wrapped = await Task.detached(priority: .userInitiated) {
-            // Returns SendableImageAndReason — captures both the image
-            // (may be nil) and a short failure-reason string. The
-            // fallback chain in ThumbnailService (QL → smaller QL →
-            // embedded JPEG extraction) records why each path failed so
-            // we can surface the real reason when every path fails
-            // (matters for diagnosing stubborn CR3s on macOS 27).
-            var img: NSImage? = nil
-            var reason: String? = nil
-            let sem = DispatchSemaphore(value: 0)
-            ThumbnailService.generateThumbnailAsyncForDiagnostics(url: url) { result, failureReason in
-                img = result
-                reason = failureReason
-                sem.signal()
+        // Use a TaskGroup to race the actual decode against a
+        // 6-second watchdog. Whichever finishes first wins. This
+        // replaces an earlier DispatchSemaphore.wait() pattern that
+        // Swift 6 strict-concurrency forbids inside async contexts
+        // (Semaphore.wait blocks the cooperative thread; you must
+        // await an async result instead).
+        let wrapped: SendableImageAndReason = await withTaskGroup(of: SendableImageAndReason.self) { group in
+            // Child 1: actual QL → small QL → CR3-embedded chain
+            group.addTask {
+                await ThumbnailService.generateThumbnailAsync(url: url)
             }
-            _ = sem.wait(timeout: .now() + 6.0)
-            if img == nil && reason == nil {
-                reason = "All decode paths timed out (6s)"
+            // Child 2: 6-second watchdog
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 6_000_000_000)
+                return SendableImageAndReason(image: nil, reason: "All decode paths timed out (6s)")
             }
-            return SendableImageAndReason(image: img, reason: reason)
-        }.value
+            // Take whichever finishes first.
+            let first = await group.next() ?? SendableImageAndReason(image: nil, reason: "Decode produced no result")
+            group.cancelAll()
+            return first
+        }
         await MainActor.run { [weak owner] in
             guard let owner = owner else { return }
             owner.thumbnailInFlight.remove(id)
             if let p = owner.photos.first(where: { $0.id == id }) {
-                p.thumbnail = wrapped.image
+                p.thumbnail = wrapped.image?.image
                 // Mark as attempted regardless of success/failure so the
                 // cell can stop showing the "Loading…" spinner and
                 // instead show a "broken image" icon if QL returned nil.
