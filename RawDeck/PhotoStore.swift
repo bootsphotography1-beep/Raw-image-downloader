@@ -138,6 +138,14 @@ final class PhotoStore: ObservableObject {
     /// so we never have two scans racing to write to `photos`.
     private var importTask: Task<Void, Never>? = nil
 
+    /// Currently-running eager-thumbnail-import task. Cancelled when
+    /// a new import starts so the OLD import's `importProgress`
+    /// updates don't bleed into the NEW import's progress bar.
+    /// Without this, two TaskGroups could be calling
+    /// `bumpImportProgress` simultaneously and the UI would flicker
+    /// between stale and fresh numbers.
+    private var thumbnailImportTask: Task<Void, Never>? = nil
+
     /// Photos whose thumbnail is currently being generated. Prevents the
     /// "thundering herd" of N cells all kicking off the same decode.
     private var thumbnailInFlight: Set<UUID> = []
@@ -215,7 +223,15 @@ final class PhotoStore: ObservableObject {
     /// 100–300 ms of blocking work on the main thread, and the size was
     /// never read anywhere. See `Photo.swift` for the rationale.
     func importFolder(_ url: URL) {
+        // Cancel any in-flight import and any in-flight eager
+        // thumbnail decode from a previous session. Without
+        // cancelling `thumbnailImportTask`, the OLD Task's
+        // `bumpImportProgress` calls would keep overwriting
+        // `importProgress` even after the NEW Task started, and
+        // the progress bar would flicker between stale and fresh
+        // numbers.
         importTask?.cancel()
+        thumbnailImportTask?.cancel()
         currentPreviewTask?.cancel()
         currentFolder = url
         isLoading = true
@@ -297,7 +313,7 @@ final class PhotoStore: ObservableObject {
         importProgress = ImportProgress(done: 0, total: photos.count, etaSeconds: nil)
         let startedAt = Date()
 
-        Task { [weak self] in
+        thumbnailImportTask = Task { [weak self] in
             guard let self = self else { return }
             // Snapshot the photo IDs upfront. If the user re-imports
             // mid-decode, the new photos won't be in this list and
