@@ -367,7 +367,7 @@ struct ImportProgressBar: View {
                         .foregroundStyle(RDColor.textSecondary)
                     if let name = folderName {
                         Text(name)
-                            .font(RDType.titleLarge)
+                            .font(RDType.displayLarge)
                             .foregroundStyle(RDColor.textPrimary)
                     }
                     if totalCount > 0 {
@@ -436,3 +436,4 @@ struct ImportProgressBar: View {
             .background(RDColor.surfaceBase)
         }
     }
+
