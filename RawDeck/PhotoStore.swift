@@ -221,6 +221,10 @@ final class PhotoStore: ObservableObject {
         isLoading = true
         loadingProgress = (0, 0)
         lastError = nil
+        // Clear the existing photos so ContentView can hide the
+        // grid (and show the import progress UI) until the eager
+        // decode finishes. The eager decode is launched at the end
+        // of `importTask` once `photos` is fully populated.
         photos = []
         selectedIDs = []
         // Always close the lightbox on a fresh import.
@@ -256,16 +260,17 @@ final class PhotoStore: ObservableObject {
             }
             self.loadingProgress = (0, urls.count)
             self.isLoading = false
-        }
 
-        // Kick off the eager thumbnail decode for the whole import.
-        // This runs in parallel with whatever the user does next
-        // (scrolling, rating, etc.) and surfaces a top-bar progress
-        // indicator with an ETA. Without this, cells rely on
-        // .onAppear to trigger loads — and if .onAppear fired
-        // before isLoading was cleared (a SwiftUI timing quirk),
-        // the cell would stay stuck on "Loading..." forever.
-        startEagerThumbnailImport()
+            // Now that `photos` is fully populated, kick off the
+            // eager thumbnail decode. CRITICAL: this MUST run
+            // AFTER `self.photos = ...`. Calling it earlier (when
+            // photos was still []) was the original bug — the
+            // snapshot inside startEagerThumbnailImport would be
+            // empty, the TaskGroup would exit immediately, and
+            // importProgress would jump straight to nil, leaving
+            // the grid stuck on "Loading..." forever.
+            self.startEagerThumbnailImport()
+        }
     }
 
     /// Eagerly decode every photo's thumbnail. Runs as a detached
@@ -871,6 +876,16 @@ final class PhotoStore: ObservableObject {
         var etaSeconds: Double?
     }
     @Published var importProgress: ImportProgress? = nil
+
+    /// True while a folder is being imported. Combines the folder
+    /// enumeration phase (`isLoading`) and the thumbnail decode phase
+    /// (`importProgress != nil`) into a single flag the view layer
+    /// can use to decide whether to show the full-screen import UI
+    /// vs the interactive grid. During this period the grid view is
+    /// NOT mounted — every photo gets fully decoded before the user
+    /// can sort, rate, or open the lightbox, so the "half loaded"
+    /// bug can't happen.
+    var isImporting: Bool { isLoading || importProgress != nil }
 
     /// Batch-export selected photos as their ORIGINAL files (no
     /// re-encoding) into a user-chosen destination folder. Shows an

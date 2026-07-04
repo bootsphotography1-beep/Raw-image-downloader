@@ -79,19 +79,29 @@ struct ContentView: View {
         }
     }
 
-    /// Library-mode content: drop zone OR grid+toolbar.
+    /// Library-mode content: drop zone, full-screen import progress,
+    /// or grid+toolbar (only after thumbnails have finished decoding).
     @ViewBuilder
     private var libraryContent: some View {
-        if store.photos.isEmpty && !store.isLoading {
+        if store.isImporting {
+            // Full-screen import UI. The grid view is intentionally
+            // NOT mounted here — every photo gets fully decoded
+            // before the user can interact with the library. This
+            // eliminates the "half loading, half aren't" bug where
+            // some cells showed thumbnails while others were stuck
+            // on a "Loading..." spinner indefinitely.
+            ImportScreen(
+                folderName: store.currentFolder?.lastPathComponent,
+                totalCount: store.photos.count,
+                isEnumerating: store.isLoading && store.photos.isEmpty,
+                progress: store.importProgress
+            )
+        } else if store.photos.isEmpty {
             DropZoneView()
         } else {
             VStack(spacing: 0) {
                 ToolbarView()
                 Divider()
-                if let prog = store.importProgress {
-                    ImportProgressBar(progress: prog)
-                    Divider()
-                }
                 FilterBarView()
                 Divider()
                 PhotoGridView()
@@ -102,8 +112,9 @@ struct ContentView: View {
         // main area). When switching to Colorway Parser mode while the
         // lightbox is open, we keep it mounted but it's covered by
         // the mode switch — practical, since the user can just go
-        // back to Library mode to see it.
-        if store.lightboxPhotoID != nil {
+        // back to Library mode to see it. Hidden during import so
+        // the user can't accidentally open it on a half-decoded photo.
+        if store.lightboxPhotoID != nil && !store.isImporting {
             LightboxView()
         }
     }
@@ -309,3 +320,119 @@ struct ImportProgressBar: View {
         .background(RDColor.surfaceRaised)
     }
 }
+
+
+    /// Full-screen import progress UI. Shown in place of the grid view
+    /// during the entire import process (folder enumeration + thumbnail
+    /// decode). The grid view is NOT mounted while this is on screen, so
+    /// the user can't interact with half-decoded photos.
+    ///
+    /// Layout: large folder icon + folder name + photo count, then a
+    /// horizontal progress bar with "X of Y loaded" and ETA. During the
+    /// enumeration phase (when we don't yet know how many files we'll
+    /// find) we show an indeterminate ProgressView and a "Reading
+    /// folder…" caption instead of a determinate bar.
+    struct ImportScreen: View {
+        let folderName: String?
+        let totalCount: Int
+        let isEnumerating: Bool
+        let progress: PhotoStore.ImportProgress?
+
+        private var fraction: Double {
+            guard let progress = progress, progress.total > 0 else { return 0 }
+            return Double(progress.done) / Double(progress.total)
+        }
+
+        private var etaText: String {
+            guard let eta = progress?.etaSeconds else { return "Estimating…" }
+            if eta < 60 { return "\(Int(eta))s remaining" }
+            if eta < 3600 {
+                let m = Int(eta / 60)
+                let s = Int(eta.truncatingRemainder(dividingBy: 60))
+                return "\(m)m \(s)s remaining"
+            }
+            let h = Int(eta / 3600)
+            let m = Int((eta.truncatingRemainder(dividingBy: 3600)) / 60)
+            return "\(h)h \(m)m remaining"
+        }
+
+        var body: some View {
+            VStack(spacing: RDSpace.xl) {
+                Spacer()
+
+                // Folder icon + name + count
+                VStack(spacing: RDSpace.s) {
+                    Image(systemName: "folder.fill")
+                        .font(.system(size: 56, weight: .light))
+                        .foregroundStyle(RDColor.textSecondary)
+                    if let name = folderName {
+                        Text(name)
+                            .font(RDType.titleLarge)
+                            .foregroundStyle(RDColor.textPrimary)
+                    }
+                    if totalCount > 0 {
+                        Text("\(totalCount) photo\(totalCount == 1 ? "" : "s")")
+                            .font(RDType.body)
+                            .foregroundStyle(RDColor.textSecondary)
+                    }
+                }
+
+                // Progress section
+                VStack(spacing: RDSpace.m) {
+                    if isEnumerating {
+                        // Phase 1: enumerating the folder. We don't know
+                        // how many files we'll find yet — show an
+                        // indeterminate ProgressView.
+                        ProgressView()
+                            .controlSize(.large)
+                            .tint(RDColor.accentPrimary)
+                        Text("Reading folder…")
+                            .font(RDType.body)
+                            .foregroundStyle(RDColor.textSecondary)
+                    } else if let progress = progress {
+                        // Phase 2: decoding thumbnails. Determinate bar
+                        // with done/total/ETA.
+                        ProgressView(value: fraction)
+                            .progressViewStyle(.linear)
+                            .tint(RDColor.accentPrimary)
+                            .frame(width: 480)
+
+                        HStack {
+                            Text("\(progress.done) of \(progress.total) thumbnails loaded")
+                                .font(RDType.body)
+                                .foregroundStyle(RDColor.textPrimary)
+                                .monospacedDigit()
+                            Spacer()
+                            Text(etaText)
+                                .font(RDType.body)
+                                .foregroundStyle(RDColor.textSecondary)
+                                .monospacedDigit()
+                        }
+                        .frame(width: 480)
+                    } else {
+                        // Edge case: importing but neither enumerating
+                        // nor decoding — should be transient.
+                        ProgressView()
+                            .controlSize(.large)
+                            .tint(RDColor.accentPrimary)
+                    }
+                }
+
+                Spacer()
+
+                // Footer hint — explains what's happening so the user
+                // doesn't think the app is frozen. Cold-cache CR3s take
+                // 5-25s each, so a 408-photo import can take 30-90
+                // minutes. Without this hint the user can't tell whether
+                // it's working or stuck.
+                Text("Importing may take several minutes for large folders. The grid will appear when all thumbnails are ready.")
+                    .font(RDType.caption)
+                    .foregroundStyle(RDColor.textTertiary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 480)
+                    .padding(.bottom, RDSpace.l)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(RDColor.surfaceBase)
+        }
+    }
