@@ -194,6 +194,15 @@ final class PhotoStore: ObservableObject {
     /// and the user pays for ALL of them before the next photo renders.
     private var currentPreviewTask: Task<Void, Never>?
 
+    /// Currently-running trash task. Cancelled when a new trash starts
+    /// or when the user hits the Cancel button next to the progress bar,
+    /// so two trashes can't be racing each other to write to `trashProgress`
+    /// — same pattern as `thumbnailImportTask` for the import flow.
+    /// Without cancellation, two Delete-key presses in quick succession
+    /// would have both Tasks publishing `trashProgress` simultaneously
+    /// and the status bar would flicker between two stale snapshots.
+    private var trashTask: Task<Void, Never>? = nil
+
     // MARK: - Derived state
 
     /// The photos to show in the grid, after applying `ratingFilterMode`,
@@ -875,6 +884,7 @@ final class PhotoStore: ObservableObject {
 
         let ids = Set(toTrash.map { $0.id })
         let urls = toTrash.map { $0.url }
+        let total = urls.count
 
         // Optimistically remove from the in-memory list (the trash op is
         // reversible via Finder's Trash, but we don't want the UI to keep
@@ -882,18 +892,106 @@ final class PhotoStore: ObservableObject {
         photos.removeAll { ids.contains($0.id) }
         selectedIDs = selectedIDs.intersection(Set(photos.map { $0.id }))
 
-        Task { [weak self] in
-            var trashed = 0
-            for url in urls {
+        // Cancel any in-flight trash so two Delete presses don't race
+        // each other to write `trashProgress` — same cancellation pattern
+        // as `thumbnailImportTask` for the import flow. We snapshot the
+        // cancelled task's progress before cancelling so we can surface
+        // a "Trashed N of M, then cancelled" alert instead of vanishing
+        // silently.
+        trashTask?.cancel()
+        trashProgress = TrashProgress(done: 0, total: total, etaSeconds: nil)
+        let startedAt = Date()
+
+        // Detached (priority .userInitiated, same as exportSelection
+        // above) so the per-file `FileManager.trashItem` syscalls don't
+        // block MainActor. A plain `Task { ... }` from a @MainActor
+        // method inherits MainActor, so the synchronous moveToTrash calls
+        // would freeze the UI for ~100-300ms × file count. Detaching
+        // runs them on a cooperative thread; we hop back to MainActor via
+        // `await MainActor.run { ... }` for each progress publish and the
+        // final alert-message settlement.
+        trashTask = Task.detached(priority: .userInitiated) { [weak self] in
+            // The Counter class lets us mutate accumulated state inside
+            // the Task body without tripping Swift 6's "captured var in
+            // concurrent closure" error (Pitfall 6 in the
+            // swift-patch-tool-brace-pitfall skill). The fields are all
+            // Sendable so we don't need `@unchecked Sendable`; the same
+            // pattern is used by `exportSelection` above.
+            final class Counter {
+                var trashed = 0
+                var failed = 0
+            }
+            let counter = Counter()
+            var wasCancelled = false
+
+            for (idx, url) in urls.enumerated() {
+                if Task.isCancelled {
+                    wasCancelled = true
+                    break
+                }
                 if ExternalAppService.moveToTrash(url) {
-                    trashed += 1
+                    counter.trashed += 1
+                } else {
+                    counter.failed += 1
+                    NSLog("RawDeck: trash failed for \(url.lastPathComponent)")
+                }
+                // Publish progress every 5 files (or on the last one) so
+                // a 500-photo trash doesn't thrash MainActor with
+                // publishes. ETA is a simple rate estimate: done/elapsed
+                // projected across the remaining work. Accuracy matters
+                // less than showing *something* is happening.
+                let done = idx + 1
+                if done % 5 == 0 || done == total {
+                    let elapsed = Date().timeIntervalSince(startedAt)
+                    let rate = Double(done) / max(elapsed, 0.001)
+                    let remainingDouble = max(0.0, Double(total - done) / max(rate, 0.001))
+                    await MainActor.run { [weak self] in
+                        self?.trashProgress = TrashProgress(
+                            done: done,
+                            total: total,
+                            etaSeconds: remainingDouble
+                        )
+                    }
                 }
             }
-            // No state to publish; the in-memory list is already correct.
-            _ = trashed
-            _ = self
+
+            // Snapshot into immutable lets before the final MainActor hop.
+            // Counter is read-only past this point; the hop can copy
+            // values into MainActor state without an isolation violation.
+            let trashed = counter.trashed
+            let failed = counter.failed
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.trashProgress = nil
+                let plural = total == 1 ? "" : "s"
+                var lines: [String] = []
+                if wasCancelled {
+                    lines.append("Trashed \(trashed) of \(total) photo\(plural) before you cancelled.")
+                } else {
+                    lines.append("Moved \(trashed) of \(total) photo\(plural) to Trash.")
+                }
+                if failed > 0 {
+                    lines.append("\(failed) failed to move.")
+                }
+                self.alertMessage = lines.joined(separator: "\n")
+            }
         }
-        return toTrash.count
+        return total
+    }
+
+    /// Cancel an in-flight bulk trash and clear the progress bar.
+    /// Wired to the × button next to the trash progress in the status
+    /// bar (see ContentView). The Task observes `Task.isCancelled` on
+    /// the next iteration through its `for` loop and exits cleanly,
+    /// leaving whatever was already trashed in Finder's Trash.
+    func cancelTrash() {
+        guard trashTask != nil else { return }
+        trashTask?.cancel()
+        // Optimistically clear the bar; the in-flight Task will also try
+        // to clear it on its way out via the `await MainActor.run` at
+        // the bottom of the loop. Two clears of `trashProgress = nil`
+        // is harmless.
+        trashProgress = nil
     }
 
     // MARK: - External app
@@ -1107,6 +1205,25 @@ final class PhotoStore: ObservableObject {
     /// Track the most recent save-ratings operation's progress so the
     /// status bar can show it. Resets to nil when the operation finishes.
     @Published var saveProgress: SaveProgress? = nil
+
+    /// Plain Sendable struct so we can publish trash progress into
+    /// `@Published` from `Task.detached` without tripping Swift 6
+    /// strict-concurrency warnings. Mirrors `ImportProgress` (the
+    /// import path has the same ETA-display requirement; trash is
+    /// fast on a single file but takes real time on a 500-photo
+    /// folder, so we surface an ETA the same way the import bar does).
+    struct TrashProgress: Sendable, Equatable {
+        var done: Int
+        var total: Int
+        var etaSeconds: Double?
+    }
+
+    /// Track the in-flight trash operation so the status bar can show
+    /// a determinate progress indicator + ETA. Non-nil while a trash
+    /// is running, nil otherwise. The status bar's `ProgressView()`
+    /// is hidden when this is nil — same shape as `exportProgress`
+    /// and `saveProgress`.
+    @Published var trashProgress: TrashProgress? = nil
 
     /// Write a sidecar XMP file next to every photo that has a rating
     /// or reject flag, then (optionally) eject the volume. Shows a

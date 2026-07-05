@@ -83,28 +83,41 @@ struct ContentView: View {
     /// or grid+toolbar (only after thumbnails have finished decoding).
     @ViewBuilder
     private var libraryContent: some View {
-        if store.isImporting {
-            // Full-screen import UI. The grid view is intentionally
-            // NOT mounted here — every photo gets fully decoded
-            // before the user can interact with the library. This
-            // eliminates the "half loading, half aren't" bug where
-            // some cells showed thumbnails while others were stuck
-            // on a "Loading..." spinner indefinitely.
-            ImportScreen(
-                folderName: store.currentFolder?.lastPathComponent,
-                totalCount: store.photos.count,
-                isEnumerating: store.isLoading && store.photos.isEmpty,
-                progress: store.importProgress
-            )
-        } else if store.photos.isEmpty {
-            DropZoneView()
-        } else {
-            VStack(spacing: 0) {
-                ToolbarView()
+        VStack(spacing: 0) {
+            // Trash progress strip — shown above the toolbar whenever
+            // a bulk trash is in flight (Cmd-A → Delete, or any Delete
+            // with selection/rejects). Mirrors the slim "ImportProgressBar"
+            // shape below so the muscle memory carries over: the bar
+            // appears at the top of the main content area, shows
+            // determinate progress + ETA, and offers a × button to abort.
+            // Hidden when `store.trashProgress == nil`.
+            if let prog = store.trashProgress {
+                TrashProgressBar(progress: prog)
                 Divider()
-                FilterBarView()
-                Divider()
-                PhotoGridView()
+            }
+            if store.isImporting {
+                // Full-screen import UI. The grid view is intentionally
+                // NOT mounted here — every photo gets fully decoded
+                // before the user can interact with the library. This
+                // eliminates the "half loading, half aren't" bug where
+                // some cells showed thumbnails while others were stuck
+                // on a "Loading..." spinner indefinitely.
+                ImportScreen(
+                    folderName: store.currentFolder?.lastPathComponent,
+                    totalCount: store.photos.count,
+                    isEnumerating: store.isLoading && store.photos.isEmpty,
+                    progress: store.importProgress
+                )
+            } else if store.photos.isEmpty {
+                DropZoneView()
+            } else {
+                VStack(spacing: 0) {
+                    ToolbarView()
+                    Divider()
+                    FilterBarView()
+                    Divider()
+                    PhotoGridView()
+                }
             }
         }
 
@@ -232,6 +245,14 @@ struct StatusBarView: View {
                 .font(RDType.caption)
                 .foregroundStyle(RDColor.textSecondary)
                 .monospacedDigit()
+            } else if let prog = store.trashProgress {
+            ProgressView()
+                .controlSize(.small)
+                .tint(RDColor.destructive)
+            Text("Trashing \(prog.done) / \(prog.total)…")
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
+                .monospacedDigit()
             } else {
             Text("\(store.photos.count) photos")
                 .font(RDType.caption)
@@ -322,6 +343,88 @@ struct ImportProgressBar: View {
                 .font(RDType.caption)
                 .foregroundStyle(RDColor.textSecondary)
                 .monospacedDigit()
+        }
+        .padding(.horizontal, RDSpace.l)
+        .padding(.vertical, RDSpace.xs + 2)
+        .background(RDColor.surfaceRaised)
+    }
+}
+
+
+/// Top-of-grid progress strip for the bulk-trash operation. Shown
+/// whenever `store.trashProgress` is non-nil — i.e. a Delete keypress
+/// (or trash button) on a multi-selection has kicked off
+/// `PhotoStore.trashSelection()` and the actual `FileManager.trashItem`
+/// work is still happening on the background task.
+///
+/// Mirrors `ImportProgressBar`'s 28pt-slim shape (same padding, same
+/// `RDColor.surfaceRaised` background, same progress-tint) so the bar
+/// visually matches the import flow. The user said *"a bar should pop
+/// up demonstrating how long it will take to delete like it does for
+/// importing images"* — that's exactly what this is.
+///
+/// On the right side of the strip sits a × cancel button that calls
+/// `store.cancelTrash()`. The Task observes `Task.isCancelled` on the
+/// next iteration through its `for` loop, breaks out cleanly, and the
+/// PhotoStore finishes the operation by setting an alert message that
+/// says "Trashed N of M photos before you cancelled."
+struct TrashProgressBar: View {
+    @EnvironmentObject var store: PhotoStore
+    let progress: PhotoStore.TrashProgress
+
+    private var fraction: Double {
+        guard progress.total > 0 else { return 0 }
+        return Double(progress.done) / Double(progress.total)
+    }
+
+    /// ETA text matching the import bar's format ("Xs remaining",
+    /// "Xm Ys remaining", "Xh Ym remaining"). Trashing is usually
+    /// faster than importing per file (~150ms vs. ~5-25s), so the
+    /// ETA in practice lands in the seconds range for typical
+    /// selections — but we mirror the import format so the user
+    /// doesn't have to learn two patterns.
+    private var etaText: String {
+        guard let eta = progress.etaSeconds else { return "Estimating…" }
+        if eta < 60 { return "\(Int(eta))s remaining" }
+        if eta < 3600 {
+            let m = Int(eta / 60)
+            let s = Int(eta.truncatingRemainder(dividingBy: 60))
+            return "\(m)m \(s)s remaining"
+        }
+        let h = Int(eta / 3600)
+        let m = Int((eta.truncatingRemainder(dividingBy: 3600)) / 60)
+        return "\(h)h \(m)m remaining"
+    }
+
+    var body: some View {
+        HStack(spacing: RDSpace.m) {
+            ProgressView(value: fraction)
+                .progressViewStyle(.linear)
+                .tint(RDColor.destructive)
+                .frame(maxWidth: 240)
+            Text("Trashing \(progress.done) / \(progress.total)")
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
+                .monospacedDigit()
+            Spacer()
+            Text(etaText)
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
+                .monospacedDigit()
+            // Cancel × — clears `trashProgress` and signals the
+            // detached Task to exit on its next loop iteration. We
+            // sit at the trailing edge of the bar so the natural
+            // left-to-right reading order is "progress → count →
+            // ETA → cancel".
+            Button {
+                store.cancelTrash()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 16))
+                    .foregroundStyle(RDColor.textSecondary)
+            }
+            .buttonStyle(.plain)
+            .help("Cancel the trash (any photos already moved to Trash will stay there)")
         }
         .padding(.horizontal, RDSpace.l)
         .padding(.vertical, RDSpace.xs + 2)
