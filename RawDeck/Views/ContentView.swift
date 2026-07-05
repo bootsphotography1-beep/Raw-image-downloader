@@ -182,6 +182,32 @@ struct ContentView: View {
                         store.lightboxStep(1)
                     }
                 }
+                // Cmd-A: Select All. The Photo menu in RawDeckApp.swift
+                // also binds this shortcut, but a SwiftUI `CommandMenu`
+                // binding can silently no-op when the app's first-
+                // responder chain is distracted (e.g. lightbox open,
+                // focus mode juggling, certain virtual-desktop setups,
+                // or when `store.mode` evaluation in the menu's
+                // `disabled(...)` is stale). Mounting the shortcut as a
+                // view-tree HiddenKeyButton guarantees the key event is
+                // captured locally in the view's scope — the same pattern
+                // the rating `1`-`5` keys use — and calls
+                // `store.selectAll()` through the same `@EnvironmentObject`
+                // the grid cells observe, so `selectedIDs` updates land
+                // on the same instance the cells read.
+                //
+                // Why both bindings are kept instead of one:
+                // - The menu version is the "discoverable" one — the user
+                //   can see "Select All" in the menu bar's Photo menu.
+                // - The overlay version is the "fires no matter what" one.
+                //   If the menu routing fails (the bug the user hit:
+                //   "selected 1, hit Cmd-A, still says 1 of 300"), the
+                //   overlay catches the keystroke at the view-tree level.
+                // Both calling `selectAll()` is idempotent — assigning a
+                // `Set` to its own member-derived copy is a no-op.
+                HiddenKeyButton(key: "a", modifiers: .command) {
+                    store.selectAll()
+                }
                 HiddenKeyButton(key: .escape, modifiers: []) {
                     if store.lightboxPhotoID != nil {
                         store.closeLightbox()
