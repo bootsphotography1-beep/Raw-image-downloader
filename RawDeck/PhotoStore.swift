@@ -935,8 +935,42 @@ final class PhotoStore: ObservableObject {
                     counter.wasCancelled = true
                     break
                 }
+                // Trash the photo. Then trash its XMP sidecar if one
+                // exists in the same folder (e.g. `IMG_1234.xmp` next
+                // to `IMG_1234.CR3`). Without this, deleting a rated
+                // photo leaves an orphan `.xmp` behind — on SD card
+                // re-insertion, that orphan rating will look like it
+                // belongs to whatever photo sits in the same slot in
+                // the next batch, which is exactly the cross-photo
+                // rating corruption the sidecar scheme is supposed to
+                // prevent. Counter invariants: count a photo as a
+                // single success/failure for the user-facing progress
+                // bar; sidecar is a follower (its absence on disk
+                // isn't a failure — it's just a photo whose metadata
+                // hadn't been written yet).
                 if ExternalAppService.moveToTrash(url) {
                     counter.trashed += 1
+                    // Best-effort sidecar follow-up. `sidecarURL(for:)`
+                    // is `static` (no actor isolation), so it's safe
+                    // to call from inside the detached Task body.
+                    let sidecar = MetadataService.sidecarURL(for: url)
+                    // `FileManager.fileExists` is `false` if the sidecar
+                    // was never written (e.g. photo had no rating yet),
+                    // so we skip the trash call entirely — no spurious
+                    // log noise from `FileManager.trashItem` failing on
+                    // a missing path.
+                    if FileManager.default.fileExists(atPath: sidecar.path) {
+                        if !ExternalAppService.moveToTrash(sidecar) {
+                            // Sidecar trashing failed AFTER the photo
+                            // already moved. The user is left with an
+                            // orphan `.xmp` next to a deleted RAW; this
+                            // is recoverable manually from Finder but
+                            // ugly. Log so the user can grep Console.app
+                            // later. NOT counted as a photo failure —
+                            // the photo did go to Trash as requested.
+                            NSLog("RawDeck: sidecar trash failed for \(sidecar.lastPathComponent) (photo already trashed)")
+                        }
+                    }
                 } else {
                     counter.failed += 1
                     NSLog("RawDeck: trash failed for \(url.lastPathComponent)")
