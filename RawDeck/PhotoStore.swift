@@ -920,13 +920,19 @@ final class PhotoStore: ObservableObject {
             final class Counter {
                 var trashed = 0
                 var failed = 0
+                /// Tracks whether `Task.isCancelled` fired mid-loop.
+                /// Lives on Counter (a reference type) rather than as a
+                /// captured `var` in the outer closure body so Swift 6
+                /// strict concurrency doesn't reject the read inside the
+                /// final `await MainActor.run { ... }` block — same
+                /// rationale as `trashed` / `failed` sitting on Counter.
+                var wasCancelled = false
             }
             let counter = Counter()
-            var wasCancelled = false
 
             for (idx, url) in urls.enumerated() {
                 if Task.isCancelled {
-                    wasCancelled = true
+                    counter.wasCancelled = true
                     break
                 }
                 if ExternalAppService.moveToTrash(url) {
@@ -960,6 +966,7 @@ final class PhotoStore: ObservableObject {
             // values into MainActor state without an isolation violation.
             let trashed = counter.trashed
             let failed = counter.failed
+            let wasCancelled = counter.wasCancelled
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 self.trashProgress = nil
