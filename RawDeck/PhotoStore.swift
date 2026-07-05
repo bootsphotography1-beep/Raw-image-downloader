@@ -1149,7 +1149,9 @@ final class PhotoStore: ObservableObject {
     func writeRatingsToMetadata(
         specificIDs: Set<UUID>? = nil,
         completion: ((Int, Int, String?) -> Void)? = nil
-    ) {
+        ) {
+        NSLog("RawDeck: writeRatingsToMetadata called; specificIDs=\(specificIDs?.count ?? -1) hasCompletion=\(completion != nil)")
+
         // Snapshot the photos we need to write. Filter to ones that
         // actually have a rating or reject flag — no point writing
         // empty sidecars for unrated photos.
@@ -1158,6 +1160,7 @@ final class PhotoStore: ObservableObject {
         } ?? photos.filter { $0.starRating > 0 || $0.isRejected }
 
         let total = candidates.count
+        NSLog("RawDeck: writeRatingsToMetadata candidates=\(total)")
         guard total > 0 else {
             completion?(0, 0, nil)
             return
@@ -1165,7 +1168,7 @@ final class PhotoStore: ObservableObject {
 
         // Snapshot photo fields to Sendable values before detaching.
         let snapshot: [(id: UUID, url: URL, starRating: Int, isRejected: Bool)] =
-            candidates.map { ($0.id, $0.url, $0.starRating, $0.isRejected) }
+        candidates.map { ($0.id, $0.url, $0.starRating, $0.isRejected) }
 
         // Show progress in the status bar.
         self.saveProgress = SaveProgress(done: 0, total: total)
@@ -1205,12 +1208,15 @@ final class PhotoStore: ObservableObject {
             // flag for photos that wrote successfully — failed ones
             // stay dirty so the user can retry.
             await MainActor.run { [weak self] in
+                NSLog("RawDeck: writeRatingsToMetadata MainActor.run completing; written=\(counter.written) failed=\(counter.failed)")
                 guard let self = self else { return }
                 self.saveProgress = nil
                 for id in counter.succeededIDs {
                     self.dirtyPhotoIDs.remove(id)
                 }
+                NSLog("RawDeck: calling completion closure")
                 completion?(counter.written, counter.failed, counter.firstError)
+                NSLog("RawDeck: completion closure returned")
             }
         }
     }

@@ -125,7 +125,9 @@ struct ToolbarView: View {
             .help("Copy selected photos to a folder of your choice, preserving the original .cr3 / .nef / .arw / .dng bytes (no re-encoding)")
 
             Button {
+                NSLog("RawDeck: Write Stars button clicked; dirty=\(store.dirtyPhotoIDs.count)")
                 store.writeRatingsToMetadata { written, failed, firstError in
+                    NSLog("RawDeck: Write Stars completion: written=\(written) failed=\(failed) err=\(firstError ?? "none")")
                     var lines: [String] = []
                     let plural = (written + failed) == 1 ? "" : "s"
                     lines.append("Saved \(written) of \(written + failed) rating\(plural) as XMP sidecars.")
@@ -138,14 +140,16 @@ struct ToolbarView: View {
                     if written > 0 && failed == 0 {
                         lines.append("\nYour ratings are safe — you can quit the app, eject the card, or keep working.")
                     }
+                    NSLog("RawDeck: setting alertMessage to: \(lines.joined(separator: " | "))")
                     store.alertMessage = lines.joined(separator: "\n")
+                    NSLog("RawDeck: alertMessage set; current value=\(store.alertMessage ?? "nil")")
                 }
             } label: {
-                if store.hasUnsavedRatings {
-                    Label("Write Stars (\(store.dirtyPhotoIDs.count))", systemImage: "square.and.arrow.down")
-                } else {
-                    Label("Write Stars", systemImage: "checkmark.circle")
-                }
+            if store.hasUnsavedRatings {
+                Label("Write Stars (\(store.dirtyPhotoIDs.count))", systemImage: "square.and.arrow.down")
+            } else {
+                Label("Write Stars", systemImage: "checkmark.circle")
+            }
             }
             .disabled(store.photos.isEmpty)
             .help(store.hasUnsavedRatings
