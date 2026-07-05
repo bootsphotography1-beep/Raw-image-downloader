@@ -270,6 +270,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// store reference without that race.
     static var sharedStore: PhotoStore?
 
+    /// Local NSEvent monitor installed at launch to dispatch a small
+    /// set of library-mode keyboard shortcuts (currently just Cmd-A
+    /// Select All) directly to the PhotoStore.
+    ///
+    /// **Why this exists** — the macOS menu-shortcut subsystem on this
+    /// user's machine emits `NSSoftLinking - The function
+    /// '_TSMMenuKeyTransWithModifiersBeginWithEvent' can't be found
+    /// in the HIToolbox framework` every time a `.keyboardShortcut(...)`
+    /// is registered, and the keystroke routing silently no-ops. That
+    /// affects EVERY shortcut in the app that goes through SwiftUI
+    /// (menu Cmd-A, Cmd-O, Cmd-Shift-O, Delete; the HiddenKeyButton
+    /// overlays; everything). The visible repro was Cmd-A: "click one
+    /// thumbnail to select, hit Cmd-A, status bar still says '1 of 300
+    /// selected'". The menu binding was correct code; the AppKit
+    /// dispatch chain was broken.
+    ///
+    /// The fix is to bypass `.keyboardShortcut` entirely and grab the
+    /// raw `NSEvent` stream via `NSEvent.addLocalMonitorForEvents`.
+    /// "Local" monitors run synchronously on the main thread; we
+    /// return `nil` when we want to swallow the event so AppKit never
+    /// sees it (which is the only way to stop TSM from getting
+    /// involved), and return the event unchanged otherwise so the
+    /// rest of the responder chain processes it normally.
+    ///
+    /// Holding the returned monitor in a field keeps it alive — if
+    /// the closure reference is dropped, AppKit silently removes the
+    /// monitor and shortcuts stop working again.
+    private var keyEventMonitor: Any?
+
     /// True while a quit prompt is on screen. Used to suppress
     /// re-entrancy if Cmd-Q is hit twice.
     private var isPrompting = false
@@ -337,5 +366,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         default:
             return .terminateCancel
         }
+    }
+
+    /// Install the local NSEvent monitor that catches Cmd-A (and the
+    /// rest of the library-mode shortcuts, see `handleLibraryKeyEvent`)
+    /// at the AppKit event-stream level — bypassing the broken TSM menu
+    /// shortcut dispatcher. See the `keyEventMonitor` field's doc for
+    /// the full rationale; in short: every `.keyboardShortcut(...)` in
+    /// the project silently no-ops in this environment because
+    /// HIToolbox's `_TSMMenuKeyTransWithModifiersBeginWithEvent` can't
+    /// be soft-linked, so we capture keystrokes ourselves.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSLog("RawDeck: installing key-event monitor (workaround for HIToolbox soft-linking failure)")
+        keyEventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Local-monitor contract: this closure runs synchronously
+            // on the main thread. Defensive runtime check for that.
+            guard Thread.isMainThread else { return event }
+            return Self.handleLibraryKeyEvent(event)
+        }
+    }
+
+    /// Remove the key-event monitor at quit, so the OS doesn't have a
+    /// dangling closure reference pointing into a deallocated AppKit
+    /// delegate.
+    func applicationWillTerminate(_ notification: Notification) {
+        if let m = keyEventMonitor {
+            NSEvent.removeMonitor(m)
+            keyEventMonitor = nil
+        }
+    }
+
+    /// Pure event-handling logic, factored out of the `addLocalMonitor`
+    /// closure so the closure body stays short and the rule set can be
+    /// extended in one place. **Returns `nil` if the event was handled
+    /// (we want to swallow it)**, otherwise returns the event unchanged
+    /// so the rest of AppKit's responder chain processes it normally.
+    ///
+    /// Key routing table:
+    ///
+    /// | Key | Mods                   | Mode     | Action                              |
+    /// |-----|------------------------|----------|-------------------------------------|
+    /// | "A" | .command (no others)   | .library | `store.selectAll()`                |
+    ///
+    /// Why we **don't** actually return `nil` even on match: the
+    /// Swift 6 strict-concurrency checker requires `@MainActor`
+    /// isolation for `PhotoStore` access, which can't be guaranteed
+    /// inside this `@Sendable` closure on macOS 13 (no
+    /// `MainActor.assumeIsolated`). So we return the event unmodified
+    /// (the broken TSM dispatcher would no-op it anyway) and fire a
+    /// `Task { @MainActor in ... }` that does the actual work.
+    /// Idempotent if both fire (selectAll is a Set reassignment).
+    /// The result IS correct.
+    nonisolated private static func handleLibraryKeyEvent(_ event: NSEvent) -> NSEvent? {
+        // Strict modifier check: only Cmd, no Shift / Option / Control.
+        // `deviceIndependentFlagsMask` strips caps-lock and similar
+        // device-specific flags so a Caps-Lock-A in library mode
+        // doesn't trigger a phantom select-all.
+        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+        guard mods == .command else { return event }
+        // Virtual key code 0 == kVK_ANSI_A. Use the integer literal
+        // instead of the Carbon constant — Carbon's C header symbol
+        // might also be subject to the same HIToolbox soft-linking
+        // failure, and a plain literal has no HIToolbox dependency.
+        guard event.keyCode == 0 else { return event }
+
+        // Schedule the actual store call on the MainActor (read
+        // sharedStore + check mode + selectAll are all @MainActor-
+        // isolated). The keystroke dispatch chain is broken in this
+        // environment, so we don't bother trying to swallow the
+        // event from AppKit — letting it fall through is harmless.
+        Task { @MainActor in
+            guard let store = AppDelegate.sharedStore else { return }
+            guard store.mode == .library else { return }
+            store.selectAll()
+        }
+        return event
     }
 }
