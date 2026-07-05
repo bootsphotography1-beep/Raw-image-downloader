@@ -217,14 +217,22 @@ struct StatusBarView: View {
             Text("Importing…")
                 .font(RDType.caption)
                 .foregroundStyle(RDColor.textSecondary)
-        } else if let prog = store.exportProgress {
+            } else if let prog = store.exportProgress {
             ProgressView()
                 .controlSize(.small)
                 .tint(RDColor.accentPrimary)
             Text("Exporting \(prog.done) / \(prog.total)…")
                 .font(RDType.caption)
                 .foregroundStyle(RDColor.textSecondary)
-        } else {
+            } else if let prog = store.saveProgress {
+            ProgressView()
+                .controlSize(.small)
+                .tint(RDColor.accentPrimary)
+            Text("Writing \(prog.done) / \(prog.total) sidecars…")
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
+                .monospacedDigit()
+            } else {
             Text("\(store.photos.count) photos")
                 .font(RDType.caption)
                 .foregroundStyle(RDColor.textSecondary)
@@ -233,7 +241,7 @@ struct StatusBarView: View {
                     .font(RDType.caption)
                     .foregroundStyle(RDColor.accentPrimary)
             }
-        }
+            }
     }
 
     @ViewBuilder

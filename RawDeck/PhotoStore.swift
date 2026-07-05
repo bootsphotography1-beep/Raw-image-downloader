@@ -126,13 +126,46 @@ final class PhotoStore: ObservableObject {
     /// How the grid is sorted. Toolbar exposes a menu to change this.
     @Published var sortMode: SortMode = .filenameAscending
 
-    /// Minimum star rating to show in the grid. 0 = no filter (show all).
-    /// Photos rated below this threshold are hidden but still in `photos`.
-    @Published var ratingFilter: Int = 0
+    /// Star-rating filter mode for the grid.
+    ///
+    /// The original implementation just used an `Int ratingFilter` with
+    /// threshold semantics (`≥N` — clicking ★3 showed 3, 4, and 5 stars).
+    /// That works for "show me my keepers" but doesn't let you isolate a
+    /// single bucket — e.g. "show me ONLY the 1-stars so I can delete them".
+    ///
+    /// Lightroom/Bridge solve this with a per-star three-state cycle:
+    ///   off → "≥N" → "=N only" → off
+    /// Click ★1 once: shows 1+ stars.
+    /// Click ★1 again: shows only 1-star photos.
+    /// Click ★1 again: clears the filter.
+    ///
+    /// `.none` means no rating filter is active — all photos pass the
+    /// rating test (subject to other filters like rejects).
+    enum RatingFilterMode: Equatable {
+        case none
+        /// `value` is the minimum rating (1...5). Shows photos with
+        /// `starRating >= value`.
+        case minimum(Int)
+        /// `value` is the exact rating (1...5). Shows photos with
+        /// `starRating == value`.
+        case exact(Int)
+        }
 
-    /// When true, rejected photos are also hidden from the grid (in
+    /// Current star-rating filter. Replaces the old `ratingFilter: Int`.
+    /// Default is `.none` (no filter — show all photos). See
+    /// `RatingFilterMode` for the three-state semantics.
+    @Published var ratingFilterMode: RatingFilterMode = .none
+
+    /// When true, rejected photos are hidden from the grid (in
     /// addition to the rating filter).
     @Published var hideRejected: Bool = false
+
+    /// When true, ONLY rejected photos are shown — the inverse of
+    /// `hideRejected`. Useful for reviewing your rejects before
+    /// trashing them ("let me see what I marked X, then bulk-delete").
+    /// Mutually exclusive with `hideRejected` (setting one clears
+    /// the other).
+    @Published var showRejectsOnly: Bool = false
 
     /// Currently-running import task. Cancelled when a new import starts
     /// so we never have two scans racing to write to `photos`.
@@ -163,14 +196,33 @@ final class PhotoStore: ObservableObject {
 
     // MARK: - Derived state
 
-    /// The photos to show in the grid, after applying `ratingFilter`,
-    /// `hideRejected`, and `sortMode`. SwiftUI re-evaluates this whenever
-    /// `photos`, `sortMode`, `ratingFilter`, or `hideRejected` changes,
-    /// or when any individual Photo's rating/reject flag publishes.
+    /// The photos to show in the grid, after applying `ratingFilterMode`,
+    /// `hideRejected`, `showRejectsOnly`, and `sortMode`. SwiftUI
+    /// re-evaluates this whenever `photos`, `sortMode`, `ratingFilterMode`,
+    /// `hideRejected`, or `showRejectsOnly` changes, or when any
+    /// individual Photo's rating/reject flag publishes.
+    ///
+    /// Filter precedence (most restrictive first):
+    /// 1. `showRejectsOnly` — only rejected photos pass (if on).
+    /// 2. `hideRejected` — rejects are filtered out (if on).
+    /// 3. `ratingFilterMode` — see `RatingFilterMode` for semantics.
     var visiblePhotos: [Photo] {
         let filtered = photos.filter { photo in
-            if hideRejected && photo.isRejected { return false }
-            if photo.starRating < ratingFilter { return false }
+            // Reject filter (show-only-rejects wins over hide-rejects)
+            if showRejectsOnly {
+                if !photo.isRejected { return false }
+            } else if hideRejected {
+                if photo.isRejected { return false }
+            }
+            // Rating filter
+            switch ratingFilterMode {
+            case .none:
+                break
+            case .minimum(let n):
+                if photo.starRating < n { return false }
+            case .exact(let n):
+                if photo.starRating != n { return false }
+            }
             return true
         }
         return filtered.sorted(by: sortMode.comparator)
@@ -724,22 +776,51 @@ final class PhotoStore: ObservableObject {
 
     // MARK: - Filter / Sort helpers
 
-    /// Cycle ratingFilter forward through 0 → 1 → 2 → 3 → 4 → 5 → 0.
-    /// Called by the toolbar button to step through "show all", "★1+",
-    /// "★2+", ... "★5 only".
-    func cycleRatingFilter() {
-        ratingFilter = (ratingFilter + 1) % 6
+    /// Cycle the rating filter through the three states for a given star.
+    /// Called by the per-star filter buttons in the filter bar.
+    ///
+    /// State transitions for star N:
+    ///   .none        → .minimum(N)   (first click — "show N and up")
+    ///   .minimum(N)  → .exact(N)     (second click — "show ONLY N")
+    ///   .exact(N)    → .none         (third click — clear filter)
+    ///   .minimum(M)/.exact(M) for M ≠ N → .minimum(N) (clicking a different star
+    ///       replaces the previous filter rather than cycling to off, because
+    ///       the user almost always wants to switch to the new bucket, not
+    ///       clear the filter entirely)
+    func cycleRatingFilter(to stars: Int) {
+        switch ratingFilterMode {
+        case .none:
+            ratingFilterMode = .minimum(stars)
+        case .minimum(let n) where n == stars:
+            ratingFilterMode = .exact(stars)
+        case .exact(let n) where n == stars:
+            ratingFilterMode = .none
+        default:
+            // Switching from one star's filter to a different star's
+            // — start the new star at .minimum (≥N).
+            ratingFilterMode = .minimum(stars)
+        }
     }
 
-    /// Set ratingFilter to a specific value (0–5). 0 means "no filter".
-    func setRatingFilter(_ value: Int) {
-        ratingFilter = max(0, min(5, value))
-    }
-
-    /// Clear the rating filter and show rejected photos.
+    /// Clear the rating filter and show rejected photos (reset all filters).
     func resetFilters() {
-        ratingFilter = 0
+        ratingFilterMode = .none
         hideRejected = false
+        showRejectsOnly = false
+    }
+
+    /// Toggle the "show rejected photos only" filter. Mutually exclusive
+    /// with `hideRejected` — turning one on turns the other off.
+    func toggleShowRejectsOnly() {
+        showRejectsOnly.toggle()
+        if showRejectsOnly { hideRejected = false }
+    }
+
+    /// Toggle the "hide rejected photos" filter. Mutually exclusive with
+    /// `showRejectsOnly` — turning one on turns the other off.
+    func toggleHideRejected() {
+        hideRejected.toggle()
+        if hideRejected { showRejectsOnly = false }
     }
 
     // MARK: - Delete

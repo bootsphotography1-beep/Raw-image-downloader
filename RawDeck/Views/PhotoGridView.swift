@@ -43,6 +43,26 @@ struct PhotoGridView: View {
         }
     }
 
+    /// Human-readable description of the active filters. Used in the
+    /// "no photos match" empty state.
+    private var filterDescription: String {
+        var parts: [String] = []
+        switch store.ratingFilterMode {
+        case .none:
+            break
+        case .minimum(let n):
+            parts.append(n == 5 ? "★5 only" : "★\(n) and up")
+        case .exact(let n):
+            parts.append("★\(n) only")
+        }
+        if store.showRejectsOnly {
+            parts.append("rejects only")
+        } else if store.hideRejected {
+            parts.append("rejects hidden")
+        }
+        return parts.isEmpty ? "no filter" : parts.joined(separator: ", ")
+    }
+
     /// Shown when the filter hides every photo. Tells the user what's
     /// happening and gives a one-click way to clear the filter.
     private var emptyFilteredState: some View {
@@ -52,7 +72,7 @@ struct PhotoGridView: View {
                 .foregroundColor(.secondary)
             Text("No photos match the current filter")
                 .font(.headline)
-            Text("You have \(store.photos.count) photos in this folder, but none match ★\(store.ratingFilter) and up\(store.hideRejected ? " (and rejects are hidden)" : "").")
+            Text("You have \(store.photos.count) photos in this folder, but none match the current filter (\(filterDescription)).")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
