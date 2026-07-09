@@ -428,16 +428,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // React to backend switches (Settings → Sync picker).
             // Re-creating the coordinator is unnecessary — `start(in:)`
             // already tears down the prior watcher.
+            //
+            // Swift 6 strict-concurrency note: the
+            // `addObserver(forName:object:queue:using:)` closure is
+            // typed as `@Sendable`, which can't reference `@MainActor`
+            // state directly (the closure type doesn't carry the
+            // `@MainActor` isolation, even when `queue: .main` runs it
+            // on the main thread at runtime). Wrap the body in
+            // `Task { @MainActor in ... }` to hop onto MainActor —
+            // same pattern the NSEvent monitor above uses.
             NotificationCenter.default.addObserver(
                 forName: .syncBackendDidChange,
                 object: nil,
                 queue: .main
             ) { _ in
-                guard let settings = AppDelegate.sharedSyncSettings else { return }
-                let ok = coordinator.start(in: settings.active)
-                if !ok {
-                    NSLog("RawDeck: failed to switch backend to %@",
-                          settings.active.rawValue)
+                Task { @MainActor in
+                    guard let settings = AppDelegate.sharedSyncSettings else { return }
+                    let ok = coordinator.start(in: settings.active)
+                    if !ok {
+                        NSLog("RawDeck: failed to switch backend to %@",
+                              settings.active.rawValue)
+                    }
                 }
             }
         }
