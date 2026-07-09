@@ -28,6 +28,8 @@ struct RawDeckApp: App {
     // exactly what we want for an app-lifetime singleton store.
     private let store = PhotoStore()
     private let colorwayParser = ColorwayParserModel()
+    private let syncSettings = SyncSettings()
+    private var syncCoordinator: SyncCoordinator?
 
     init() {
         // Wire the singleton store into the AppDelegate BEFORE any
@@ -35,6 +37,15 @@ struct RawDeckApp: App {
         // stored property — no `@StateObject` machinery involved —
         // so we get the same instance the SwiftUI scene will use.
         AppDelegate.sharedStore = store
+        AppDelegate.sharedSyncSettings = syncSettings
+
+        // Construct the sync coordinator against the store. We don't
+        // start watching yet — that happens after the Settings window
+        // has had a chance to render (or after first import, whichever
+        // comes first) to avoid hammering FSEvents on launch.
+        let coordinator = SyncCoordinator(store: store)
+        self.syncCoordinator = coordinator
+        AppDelegate.sharedSyncCoordinator = coordinator
     }
 
     var body: some Scene {
@@ -45,6 +56,20 @@ struct RawDeckApp: App {
         }
         .windowResizability(.contentMinSize)
         .commands {
+            // Cmd+, Settings — opens the RawDeck settings window
+            // (Library / Sync / Editor tabs).
+            CommandGroup(after: .appSettings) {
+                Button("RawDeck Settings…") {
+                    if let store = AppDelegate.sharedStore,
+                       let settings = AppDelegate.sharedSyncSettings {
+                        SettingsWindowController.shared.show(
+                            store: store, settings: settings
+                        )
+                    }
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+
             // Replace the default "New" with mode-aware imports.
             // Cmd+O: Library → Import Folder, Colorway Parser → Open Image.
             // Disabled when the action doesn't apply to the current mode.
@@ -269,6 +294,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// fragile across Xcode versions. A static lets us share the
     /// store reference without that race.
     static var sharedStore: PhotoStore?
+    static var sharedSyncSettings: SyncSettings?
+    static var sharedSyncCoordinator: SyncCoordinator?
 
     /// Local NSEvent monitor installed at launch to dispatch a small
     /// set of library-mode keyboard shortcuts (currently just Cmd-A
@@ -383,6 +410,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // on the main thread. Defensive runtime check for that.
             guard Thread.isMainThread else { return event }
             return Self.handleLibraryKeyEvent(event)
+        }
+
+        // Start the live-sync coordinator against the user's selected
+        // backend (defaults to iCloud Drive). If the backend isn't
+        // reachable (signed out, app missing, macOS < 14), the
+        // coordinator returns `false` and we log it; the manual
+        // import UX (`Cmd+O`) remains the user's only path.
+        if let coordinator = AppDelegate.sharedSyncCoordinator,
+           let settings = AppDelegate.sharedSyncSettings {
+            let started = coordinator.start(in: settings.active)
+            if !started {
+                NSLog("RawDeck: sync coordinator did not start (backend=%@, see Settings → Sync)",
+                      settings.active.rawValue)
+            }
+
+            // React to backend switches (Settings → Sync picker).
+            // Re-creating the coordinator is unnecessary — `start(in:)`
+            // already tears down the prior watcher.
+            NotificationCenter.default.addObserver(
+                forName: .syncBackendDidChange,
+                object: nil,
+                queue: .main
+            ) { _ in
+                guard let settings = AppDelegate.sharedSyncSettings else { return }
+                let ok = coordinator.start(in: settings.active)
+                if !ok {
+                    NSLog("RawDeck: failed to switch backend to %@",
+                          settings.active.rawValue)
+                }
+            }
         }
     }
 

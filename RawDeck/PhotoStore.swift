@@ -350,6 +350,72 @@ final class PhotoStore: ObservableObject {
         }
     }
 
+    // MARK: - Live library sync (called by `SyncCoordinator`)
+
+    /// Add a single photo that just landed on disk. Called by the
+    /// library watcher when a new RAW appears anywhere under the active
+    /// library root. Idempotent — if the URL is already tracked, we
+    /// refresh its XMP and return without adding a duplicate row.
+    ///
+    /// We deliberately do NOT kick the eager-thumbnail pipeline here.
+    /// A single new photo shouldn't trigger a full-grid redraw; the
+    /// caller (or the next `loadThumbnails(in:)` pass) will pick it
+    /// up. That keeps a 50-photo phone sync from forcing 50 thumbnail
+    /// decodes the user has to wait through.
+    func noteNewPhotoOnDisk(at url: URL) {
+        guard ThumbnailService.isLikelyRAW(url) else { return }
+        if let existing = photos.first(where: { $0.url == url }) {
+            // Refresh XMP in case the file arrived with a sidecar.
+            if let meta = MetadataService.readXMPSidecar(for: url) {
+                existing.starRating = meta.starRating
+                existing.isRejected  = meta.isRejected
+            }
+            return
+        }
+        let photo = Photo(url: url)
+        if let meta = MetadataService.readXMPSidecar(for: url) {
+            photo.starRating = meta.starRating
+            photo.isRejected = meta.isRejected
+        }
+        photos.append(photo)
+        sortInPlaceIfNeeded()
+    }
+
+    /// Refresh metadata for one photo whose sidecar (or attrs) just
+    /// changed. No-op if the photo isn't tracked.
+    func notePhotoMetadataChanged(at url: URL) {
+        guard let photo = photos.first(where: { $0.url == url }) else { return }
+        // Read whichever metadata the file actually has. We don't
+        // touch `currentFolder` here — the user's view shouldn't jump
+        // because a sidecar was rewritten.
+        if let meta = MetadataService.readXMPSidecar(for: url) {
+            photo.starRating = meta.starRating
+            photo.isRejected = meta.isRejected
+        }
+    }
+
+    /// Remove a photo whose underlying file disappeared. No-op if it
+    /// wasn't tracked. Detaches from the visible-photos computation
+    /// lazily.
+    func notePhotoRemovedFromDisk(at url: URL) {
+        photos.removeAll { $0.url == url }
+        selectedIDs = selectedIDs.filter { id in
+            photos.contains(where: { $0.id == id })
+        }
+        if let open = lightboxPhotoID, !photos.contains(where: { $0.id == open }) {
+            lightboxPhotoID = nil
+        }
+    }
+
+    /// Re-apply the active sort after a roster change (new files).
+    /// Pulled out so the watcher path doesn't inline sort logic.
+    /// Delegates to `SortMode.comparator` so we never have to keep a
+    /// local copy of the comparison rules in sync with the visible
+    /// sort in `visiblePhotos`.
+    private func sortInPlaceIfNeeded() {
+        photos.sort(by: sortMode.comparator)
+    }
+
     /// Eagerly decode every photo's thumbnail. Runs as a detached
     /// task so it doesn't block MainActor. Updates `importProgress`
     /// as it goes. Decodes happen in serial (one at a time) to
