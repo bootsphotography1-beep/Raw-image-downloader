@@ -189,7 +189,7 @@ struct SettingsView: View {
 
     // MARK: - Migration
 
-    private func migrate(currentlyActive from: SyncBackend, to to: SyncBackend) {
+    private func migrate(currentlyActive from: SyncBackend, to: SyncBackend) {
         guard from != to else { return }
         guard settings.isAvailable(to) else {
             migrationStatus = "Destination backend isn't available."

@@ -90,11 +90,24 @@ final class LibraryWatcher {
         let callback: FSEventStreamCallback = { _, info, count, eventPaths, eventFlags, _ in
             guard let info = info else { return }
             let watcher = Unmanaged<LibraryWatcher>.fromOpaque(info).takeUnretainedValue()
-            // `eventPaths` is a `UnsafePointer<UnsafeRawPointer>` to a C array.
+            // `eventPaths` is a `UnsafeMutableRawPointer` that, with the
+            // standard `FSEventStreamCreate` (no `kFSEventStreamCreateFlagUseCFTypes`),
+            // actually points to a C array of `const char *` UTF-8 strings —
+            // i.e. `const char * const *`. Reinterpret it as a typed pointer
+            // to an array of optional C-string pointers and walk it.
             // On macOS the strings are guaranteed to be valid UTF-8 from
             // FSEventStreamCreate — converting through `String(cString:)`
             // is the recommended path.
-            let paths = UnsafeBufferPointer(start: eventPaths, count: count)
+            // Use `withMemoryRebound` (not `bindMemory`) because the
+            // pointer is handed to us already typed as `const char *const *`;
+            // rebinding tells Swift to treat those bytes as our type for
+            // the duration of the closure without any memory writes.
+            let paths = eventPaths.withMemoryRebound(
+                to: Optional<UnsafePointer<CChar>>.self,
+                capacity: count
+            ) { buf in
+                Array(UnsafeBufferPointer(start: buf, count: count))
+            }
             for index in 0..<count {
                 guard let rawPath = paths[index] else { continue }
                 let path = String(cString: rawPath)
