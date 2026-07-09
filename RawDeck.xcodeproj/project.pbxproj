@@ -33,6 +33,14 @@
 			A1000024 /* CPUDeltaRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000024 /* CPUDeltaRenderer.swift */; };
 		A1000025 /* ExportService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000025 /* ExportService.swift */; };
 		A1000026 /* MetadataService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000026 /* MetadataService.swift */; };
+		A1000027 /* InboxSorter.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000027 /* InboxSorter.swift */; };
+		A1000028 /* LibraryMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000028 /* LibraryMigrator.swift */; };
+		A1000029 /* LibraryRoot.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000029 /* LibraryRoot.swift */; };
+		A1000030 /* LibraryWatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000030 /* LibraryWatcher.swift */; };
+		A1000031 /* SettingsWindow.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000031 /* SettingsWindow.swift */; };
+		A1000032 /* SyncBackend.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000032 /* SyncBackend.swift */; };
+		A1000033 /* SyncCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000033 /* SyncCoordinator.swift */; };
+		A1000034 /* SyncSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1000034 /* SyncSettings.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -63,6 +71,14 @@
 		B1000025 /* ExportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportService.swift; sourceTree = "<group>"; };
 		B1000026 /* MetadataService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MetadataService.swift; sourceTree = "<group>"; };
 		B2000001 /* RawDeck.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = RawDeck.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		B1000027 /* InboxSorter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InboxSorter.swift; sourceTree = "<group>"; };
+		B1000028 /* LibraryMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryMigrator.swift; sourceTree = "<group>"; };
+		B1000029 /* LibraryRoot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryRoot.swift; sourceTree = "<group>"; };
+		B1000030 /* LibraryWatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryWatcher.swift; sourceTree = "<group>"; };
+		B1000031 /* SettingsWindow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsWindow.swift; sourceTree = "<group>"; };
+		B1000032 /* SyncBackend.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBackend.swift; sourceTree = "<group>"; };
+		B1000033 /* SyncCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncCoordinator.swift; sourceTree = "<group>"; };
+		B1000034 /* SyncSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSettings.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -138,6 +154,7 @@
 			B1000011 /* ExternalAppService.swift */,
 			B1000025 /* ExportService.swift */,
 			B1000026 /* MetadataService.swift */,
+			D1000009 /* Library */,
 		);
 		path = Services;
 		sourceTree = "<group>";
@@ -166,6 +183,22 @@
 			path = DesignSystem;
 			sourceTree = "<group>";
 		};
+		D1000009 /* Library */ = {
+			isa = PBXGroup;
+			children = (
+				B1000027 /* InboxSorter.swift */,
+				B1000028 /* LibraryMigrator.swift */,
+				B1000029 /* LibraryRoot.swift */,
+				B1000030 /* LibraryWatcher.swift */,
+				B1000031 /* SettingsWindow.swift */,
+				B1000032 /* SyncBackend.swift */,
+				B1000033 /* SyncCoordinator.swift */,
+				B1000034 /* SyncSettings.swift */,
+			);
+			path = Library;
+			sourceTree = "<group>";
+		};
+
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -260,6 +293,14 @@
 				A1000024 /* CPUDeltaRenderer.swift in Sources */,
 				A1000025 /* ExportService.swift in Sources */,
 				A1000026 /* MetadataService.swift in Sources */,
+			A1000027 /* InboxSorter.swift in Sources */,
+			A1000028 /* LibraryMigrator.swift in Sources */,
+			A1000029 /* LibraryRoot.swift in Sources */,
+			A1000030 /* LibraryWatcher.swift in Sources */,
+			A1000031 /* SettingsWindow.swift in Sources */,
+			A1000032 /* SyncBackend.swift in Sources */,
+			A1000033 /* SyncCoordinator.swift in Sources */,
+			A1000034 /* SyncSettings.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
