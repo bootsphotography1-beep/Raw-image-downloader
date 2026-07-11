@@ -247,6 +247,8 @@ public struct RDStarRow: View {
             ForEach(1...5, id: \.self) { i in
                 star(for: i)
                     .frame(width: size, height: size)
+                    // Spring-pop on rating change. See StarPopModifier below.
+                    .modifier(StarPopModifier(index: i, rating: rating))
             }
         }
     }
