@@ -129,6 +129,15 @@ struct ContentView: View {
         // the user can't accidentally open it on a half-decoded photo.
         if store.lightboxPhotoID != nil && !store.isImporting {
             LightboxView()
+                // Combined transition: scale up from 0.85 + fade in.
+                // The store wraps openLightbox/closeLightbox in
+                // withAnimation, so the symmetric transition fires.
+                .transition(
+                    .asymmetric(
+                        insertion: .scale(scale: 0.85).combined(with: .opacity),
+                        removal: .scale(scale: 0.95).combined(with: .opacity)
+                    )
+                )
         }
     }
 

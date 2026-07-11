@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import AppKit
 import Combine
+import SwiftUI
 
 /// Mutable counter used inside Task.detached to accumulate write
 /// results across iterations. Required because Swift 6 strict
@@ -795,7 +796,12 @@ final class PhotoStore: ObservableObject {
         // Cancel any in-flight preview decode — the user is opening a
         // new lightbox context. The new photo's decode will start below.
         currentPreviewTask?.cancel()
-        lightboxPhotoID = photo.id
+        // Animate just the ID mutation — the rest (preview cancel,
+        // pre-warm decode) stays synchronous. The .transition on the
+        // parent conditional in ContentView fires from this.
+        withAnimation(.spring(response: 0.35, dampingFraction: 0.78)) {
+            lightboxPhotoID = photo.id
+        }
         selectedIDs = [photo.id]
         loadPreview(for: photo)
         // Pre-warm the next and previous so arrow presses are instant.
@@ -812,7 +818,10 @@ final class PhotoStore: ObservableObject {
         // lightbox; the photo they're navigating to next (in the grid)
         // doesn't need the full preview.
         currentPreviewTask?.cancel()
-        lightboxPhotoID = nil
+        // Symmetric close animation — same spring, slightly snappier.
+        withAnimation(.easeOut(duration: 0.22)) {
+            lightboxPhotoID = nil
+        }
     }
 
     /// Navigate to the next (or previous, with negative step) photo in the

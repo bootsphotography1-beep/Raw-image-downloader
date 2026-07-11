@@ -497,3 +497,45 @@ public struct RDPixelmatorSentBadge: View {
             .accessibilityLabel("Sent to Pixelmator Pro")
     }
 }
+
+
+// MARK: - Star pop animation modifier
+
+/// Spring-pops a star (or any view) when its fill state flips. Watches
+/// the supplied index against the parent's rating and runs a brief
+/// scale-bounce (0.4 -> 1.18 -> 1.0) only on the transitions where
+/// this particular star actually changed.
+struct StarPopModifier: ViewModifier {
+    let index: Int
+    let rating: Int
+
+    @State private var popped: Bool = false
+    @State private var prevFilled: Bool = false
+    @State private var didAppear: Bool = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(popped ? 1.0 : 0.4)
+            .animation(
+                .spring(response: 0.32, dampingFraction: 0.55),
+                value: popped
+            )
+            .onAppear {
+                if !didAppear {
+                    popped = true
+                    prevFilled = index <= rating
+                    didAppear = true
+                }
+            }
+            .onChange(of: rating) { newRating in
+                let nowFilled = index <= newRating
+                if nowFilled != prevFilled {
+                    popped = false
+                    DispatchQueue.main.async {
+                        popped = true
+                    }
+                }
+                prevFilled = nowFilled
+            }
+    }
+}
