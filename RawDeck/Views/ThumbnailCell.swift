@@ -75,13 +75,26 @@ struct ThumbnailCell: View {
 
                 // Reject X badge (top-right) — destructive color from the
                 // design system, not the system .red which can shift in
-                // dark mode.
+                // dark mode. Wrapped with a stamp-style scale + slight
+                // rotation that fires when isRejected flips true (the
+                // .transition only fires for *appearing* views, which is
+                // exactly the "just rejected" moment).
                 if photo.isRejected {
                     Image(systemName: "xmark.circle.fill")
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white, RDColor.destructive)
                         .font(.title2)
                         .padding(RDSpace.xs + 2)
+                        .transition(
+                            .asymmetric(
+                                insertion: .scale(scale: 0.4)
+                                    .combined(with: .rotation(.degrees(-30)))
+                                    .animation(.spring(response: 0.28, dampingFraction: 0.5)),
+                                removal: .scale(scale: 0.6)
+                                    .combined(with: .opacity)
+                                    .animation(.easeOut(duration: 0.15))
+                            )
+                        )
                 }
             }
             .overlay(
@@ -90,6 +103,12 @@ struct ThumbnailCell: View {
                         isSelected ? RDColor.accentPrimary :
                             (store.hoveredPhotoID == photo.id ? RDColor.hairlineAccent : Color.clear),
                         lineWidth: isSelected ? 2 : 1
+                    )
+                    // Spring the selection ring in/out instead of snapping.
+                    // value: isSelected triggers the spring on every flip.
+                    .animation(
+                        .spring(response: 0.25, dampingFraction: 0.7),
+                        value: isSelected
                     )
             )
             .background(
@@ -153,9 +172,16 @@ struct ThumbnailCell: View {
             }
             Divider()
             Button(role: .destructive) {
+                // Trash the file first (this is the irreversible part),
+                // then remove from the store inside withAnimation so
+                // SwiftUI's default list-transition (fade + collapse)
+                // plays on the grid. Without withAnimation the cell
+                // would just vanish.
                 _ = ExternalAppService.moveToTrash(photo.url)
-                store.photos.removeAll { $0.id == photo.id }
-                store.selectedIDs = store.selectedIDs.intersection(Set(store.photos.map { $0.id }))
+                withAnimation(.easeOut(duration: 0.22)) {
+                    store.photos.removeAll { $0.id == photo.id }
+                    store.selectedIDs = store.selectedIDs.intersection(Set(store.photos.map { $0.id }))
+                }
             } label: {
                 Text("Move to Trash")
             }
