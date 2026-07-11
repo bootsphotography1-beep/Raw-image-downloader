@@ -185,7 +185,29 @@ struct ThumbnailCell: View {
     /// un-rejecting). Hoisted to a static so the compiler doesn't choke
     /// on the nested .combined(with:) chain.
     static let rejectBadgeTransition: AnyTransition = .asymmetric(
-        insertion: .scale(scale: 0.4).combined(with: .rotation(.degrees(-30))),
+        // Insertion: stamp in — scale from 0.4 with a -30° rotation.
+        // AnyTransition has no .rotation() static; wrap a custom
+        // modifier via .modifier(active:identity:).
+        insertion: .scale(scale: 0.4).combined(
+            with: .modifier(
+                active: RejectStampModifier(active: true),
+                identity: RejectStampModifier(active: false)
+            )
+        ),
+        // Removal: quick fade+shrink. No rotation on the way out —
+        // un-rejecting should feel like a quiet undo, not a re-stamp.
         removal: .scale(scale: 0.6).combined(with: .opacity)
     )
+
+    /// Inner modifier used by `rejectBadgeTransition` to apply a
+    /// -30° rotation when the transition is active. SwiftUI's
+    /// `AnyTransition` has no built-in `.rotation`, so we wrap a
+    /// custom ViewModifier via `.modifier(active:identity:)`.
+    private struct RejectStampModifier: ViewModifier {
+        let active: Bool
+        func body(content: Content) -> some View {
+            content
+                .rotationEffect(.degrees(active ? -30 : 0))
+        }
+    }
 }
