@@ -73,30 +73,22 @@ struct ThumbnailCell: View {
                 .aspectRatio(1, contentMode: .fit)
                 .clipped()
 
-                // Reject X badge (top-right) — destructive color from the
-                // design system, not the system .red which can shift in
-                // dark mode. Wrapped with a stamp-style scale + slight
-                // rotation that fires when isRejected flips true (the
-                // .transition only fires for *appearing* views, which is
-                // exactly the "just rejected" moment).
+                // Reject X badge (top-right). Transition hoisted to a static
+                // because the nested .combined(with:) chain inside an inline
+                // .transition(.asymmetric(...)) makes the Swift compiler time
+                // out ("unable to type-check this expression in reasonable
+                // time"). .animation on the parent overlay fires the
+                // transition whenever isRejected flips.
                 if photo.isRejected {
                     Image(systemName: "xmark.circle.fill")
                         .symbolRenderingMode(.palette)
                         .foregroundStyle(.white, RDColor.destructive)
                         .font(.title2)
                         .padding(RDSpace.xs + 2)
-                        .transition(
-                            .asymmetric(
-                                insertion: .scale(scale: 0.4)
-                                    .combined(with: .rotation(.degrees(-30)))
-                                    .animation(.spring(response: 0.28, dampingFraction: 0.5)),
-                                removal: .scale(scale: 0.6)
-                                    .combined(with: .opacity)
-                                    .animation(.easeOut(duration: 0.15))
-                            )
-                        )
+                        .transition(Self.rejectBadgeTransition)
                 }
             }
+            .animation(.spring(response: 0.28, dampingFraction: 0.5), value: photo.isRejected)
             .overlay(
                 RoundedRectangle(cornerRadius: RDRadius.card, style: .continuous)
                     .strokeBorder(
@@ -187,5 +179,13 @@ struct ThumbnailCell: View {
             }
         }
     }
+    /// Asymmetric transition for the reject X badge. Insertion: scale-up
+    /// from 0.4 with a -30 degree rotation (stamp feel). Removal:
+    /// scale-down + opacity fade (quick, since the user is explicitly
+    /// un-rejecting). Hoisted to a static so the compiler doesn't choke
+    /// on the nested .combined(with:) chain.
+    static let rejectBadgeTransition: AnyTransition = .asymmetric(
+        insertion: .scale(scale: 0.4).combined(with: .rotation(.degrees(-30))),
+        removal: .scale(scale: 0.6).combined(with: .opacity)
+    )
 }
-
