@@ -3,12 +3,15 @@ import AppKit
 
 /// Full-screen photo viewer. Covers the main grid when open.
 ///
-/// Layout:
-/// - Top: filename + close hint
-/// - Center: the current photo at fit-aspect, as large as the window allows
-/// - Bottom: a horizontal scroll strip of every photo's thumbnail, with the
-///   currently-viewed photo highlighted. Clicking a strip thumbnail jumps
-///   the main view to that photo.
+/// Design discipline (v2):
+///  - Header & thumbnail strip use plain rgba(0,0,0,0.55) strips, no
+///    backdrop-filter blur (that's the LLM glassmorphism tell). The web
+///    design also strips it.
+///  - Rating HUD is text buttons (1-5) over the stage, not a star-row
+///    component. The Reject action is a text button labelled "REJECT".
+///  - 3:2 native RAW aspect, true black stage, no rounded corners on
+///    the strip cell.
+///  - All store APIs unchanged.
 ///
 /// Keyboard (handled in ContentView via HiddenKeyButton):
 /// - `Esc` / `Space` (no photo hovered): close
@@ -23,16 +26,11 @@ struct LightboxView: View {
 
     var body: some View {
         if let photo = store.lightboxPhoto {
-            // Wrap the header in an @ObservedObject subview so changes to
-            // `photo.starRating` / `photo.isRejected` propagate (the parent
-            // only observes `store`, not `photo`).
             LightboxContents(photo: photo)
         }
     }
 }
 
-/// The full lightbox UI, scoped to a single observed `Photo` instance.
-/// Re-renders whenever the photo's @Published fields change.
 struct LightboxContents: View {
     @EnvironmentObject var store: PhotoStore
     @ObservedObject var photo: Photo
@@ -46,133 +44,188 @@ struct LightboxContents: View {
             RDColor.stageBlack.ignoresSafeArea()
 
             VStack(spacing: 0) {
-                header
                 photoStage
                 Spacer(minLength: 0)
                 thumbnailStrip
             }
         }
         .contentShape(Rectangle())
-        // Double-click on the stage opens in Pixelmator (matches the
-        // grid's double-click behaviour). Attached FIRST so it has
-        // priority over the single-tap-to-close.
+        // Double-click on the stage opens in Pixelmator.
         .onTapGesture(count: 2) {
             store.openSelectionInPixelmator(photo: photo)
         }
         // Capture single clicks on the backdrop so they don't fall
-        // through to the grid behind us. (Placed after count:2 so a
-        // double-click is not also treated as a single-click close.)
+        // through to the grid behind us.
         .onTapGesture {
             store.closeLightbox()
         }
         .transition(.opacity)
     }
 
-    // MARK: - Header
-
-    private var header: some View {
-        HStack(spacing: RDSpace.m) {
-            // Filename + position counter
-            VStack(alignment: .leading, spacing: 2) {
-                Text(photo.fileName)
-                    .font(RDType.titleMedium)
-                    .foregroundStyle(RDColor.textOnStage)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                if let idx = store.photos.firstIndex(where: { $0.id == photo.id }) {
-                    Text("Photo \(idx + 1) of \(store.photos.count)")
-                        .font(RDType.caption)
-                        .foregroundStyle(RDColor.textOnStageDim)
-                }
-            }
-            Spacer()
-            // Star row for the current photo (read-only-ish; press 1-5 to change)
-            RDStarRow(rating: photo.starRating, size: 14, isRejected: photo.isRejected)
-            // Close button
-            Button {
-                store.closeLightbox()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .font(.title2)
-                    .foregroundStyle(RDColor.textOnStage.opacity(0.8))
-            }
-            .buttonStyle(.plain)
-            .help("Close lightbox (Esc)")
-        }
-        .padding(.horizontal, RDSpace.l)
-        .padding(.vertical, RDSpace.s + 2)
-        .background(RDColor.stageBlack.opacity(0.4))
-    }
-
     // MARK: - Photo stage
 
-    /// What gets shown in the center of the lightbox.
-    ///
-    /// Resolution ladder, fastest to slowest:
-    /// 1. Thumbnail (512px, from the camera's embedded preview JPEG) —
-    ///    painted the instant the lightbox opens.
-    /// 2. Full-resolution preview (sensor native, e.g. 6000×4000 for a
-    ///    24MP camera) — produced by `loadPreview(for:)`. Arrives 200–500ms
-    ///    later; SwiftUI swaps the source and the view sharpens in place.
-    /// 3. While both are missing, a spinner + "Loading preview…" copy.
-    ///
-    /// The intent is that the lightbox always has *something* to show —
-    /// it never blocks the user's input — and the photo it eventually
-    /// shows is the full-resolution demosaiced sensor capture, not the
-    /// stretched 1600px embedded JPEG that used to look grainy/dark/blurry.
+    /// The full lightbox photo + meta HUD + rating/reject bar.
     private var photoStage: some View {
         ZStack {
-            if let preview = photo.preview {
-                Image(nsImage: preview)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    // `transition(.opacity)` would steal a frame at swap
-                    // time. `.id(photo.id)` would unmount/remount, also
-                    // bad. Default crossfade = SwiftUI just republishes
-                    // the @ObservedObject photo.preview and the Image
-                    // re-renders against the new pixels. No animation.
-            } else if let thumb = photo.thumbnail {
-                Image(nsImage: thumb)
-                    .resizable()
-                    .aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .opacity(0.85)
-            } else {
-                VStack(spacing: RDSpace.s) {
-                    ProgressView()
-                        .controlSize(.large)
-                        .tint(RDColor.textOnStage)
-                    Text("Loading preview…")
-                        .font(RDType.caption)
-                        .foregroundStyle(RDColor.textOnStageDim)
-                }
-            }
+            // The photo itself — fills the stage at native 3:2 aspect.
+            photoImage
 
-            // Rejected X badge (top-left of the stage) — matches the grid cell.
-            if photo.isRejected {
-                VStack {
-                    HStack {
-                        Image(systemName: "xmark.circle.fill")
-                            .symbolRenderingMode(.palette)
-                            .foregroundStyle(.white, RDColor.destructive)
-                            .font(.largeTitle)
-                            .padding(RDSpace.m)
-                        Spacer()
-                    }
-                    Spacer()
-                }
-            }
+            // Meta strip — top-left, single line of mono, on a plain rgba strip.
+            metaStrip
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .padding(RDSpace.s)
+
+            // Rating + reject HUD — bottom-left of stage, just above the strip.
+            ratingHud
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomLeading)
+                .padding(.horizontal, RDSpace.l)
+                .padding(.bottom, RDSpace.s)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
+    @ViewBuilder
+    private var photoImage: some View {
+        if let preview = photo.preview {
+            Image(nsImage: preview)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else if let thumb = photo.thumbnail {
+            Image(nsImage: thumb)
+                .resizable()
+                .aspectRatio(contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .opacity(0.85)
+        } else {
+            VStack(spacing: RDSpace.s) {
+                ProgressView()
+                    .controlSize(.large)
+                    .tint(RDColor.textOnStage)
+                Text("Loading preview…")
+                    .font(RDType.caption)
+                    .foregroundStyle(RDColor.textOnStageDim)
+            }
+        }
+    }
+
+    /// Top-left mono meta strip — filename, position counter, image dimensions.
+    /// Plain rgba(0,0,0,0.55) background, no blur.
+    private var metaStrip: some View {
+        HStack(spacing: RDSpace.s) {
+            Text(photo.fileName)
+                .font(RDType.captionMonoEmph)
+                .foregroundStyle(RDColor.textOnStage)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            if let idx = store.photos.firstIndex(where: { $0.id == photo.id }) {
+                Text("·")
+                    .foregroundStyle(RDColor.textOnStageDim)
+                Text("Photo \(idx + 1) of \(store.photos.count)")
+                    .font(RDType.microMono)
+                    .foregroundStyle(RDColor.textOnStageDim)
+            }
+            // Image dimensions derived from whichever Image we have.
+            // NSImage.size is reliable post-decode; falls back to nothing
+            // when neither thumbnail nor preview has decoded yet.
+            if let dims = currentDimensions() {
+                Text("·")
+                    .foregroundStyle(RDColor.textOnStageDim)
+                Text(dims)
+                    .font(RDType.microMono)
+                    .foregroundStyle(RDColor.textOnStageDim)
+            }
+        }
+        .padding(.horizontal, RDSpace.s)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.55))
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(alignment: .topTrailing) {
+            // Close button at the right edge of the meta strip row.
+            Button {
+                store.closeLightbox()
+            } label: {
+                Text("×")
+                    .font(.system(size: 14, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(RDColor.textOnStage)
+                    .padding(4)
+            }
+            .buttonStyle(.plain)
+            .help("Close lightbox (Esc)")
+            .padding(.trailing, RDSpace.s)
+        }
+    }
+
+    /// Get the current photo dimensions as a string. Uses the preview if
+    /// loaded (matches the lightbox's actual displayed image); falls back
+    /// to the thumbnail's intrinsic size; returns nil if neither is loaded.
+    private func currentDimensions() -> String? {
+        let img = photo.preview ?? photo.thumbnail
+        guard let img, img.size.width > 0, img.size.height > 0 else { return nil }
+        return "\(Int(img.size.width))×\(Int(img.size.height))"
+    }
+
+    /// Rating + reject HUD — text buttons on a plain rgba strip.
+    /// 1-5 are rate keys, · is a separator, REJECT is the toggle.
+    private var ratingHud: some View {
+        HStack(spacing: RDSpace.s) {
+            ForEach(1...5, id: \.self) { n in
+                Button {
+                    store.setRating(photo.starRating == n ? 0 : n, photo: photo)
+                } label: {
+                    Text("\(n)")
+                        .font(RDType.microMono)
+                        .foregroundStyle(photo.starRating >= n
+                                         ? RDColor.starActive
+                                         : Color.white.opacity(0.30))
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 2)
+                }
+                .buttonStyle(.plain)
+                .help("Set rating to \(n) (or clear if already \(n))")
+            }
+            Text("·")
+                .font(RDType.microMono)
+                .foregroundStyle(Color.white.opacity(0.30))
+                .padding(.horizontal, 2)
+            Button {
+                store.toggleReject(photo: photo)
+            } label: {
+                HStack(spacing: 3) {
+                    Text("REJECT")
+                        .font(RDType.microMono)
+                        .tracking(0.4)
+                        .foregroundStyle(photo.isRejected
+                                         ? RDColor.textOnStage
+                                         : Color.white.opacity(0.55))
+                    if photo.isRejected {
+                        Text("✓")
+                            .font(RDType.microMono)
+                            .foregroundStyle(RDColor.textOnStage)
+                    }
+                }
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(photo.isRejected
+                            ? RDColor.destructive
+                            : Color.clear)
+            }
+            .buttonStyle(.plain)
+            .help("Toggle reject (X)")
+        }
+        .padding(.horizontal, RDSpace.s)
+        .padding(.vertical, 4)
+        .background(Color.black.opacity(0.55))
+    }
+
     // MARK: - Bottom thumbnail strip
 
+    /// Bottom strip of thumbnails. Plain rgba strip, no blur, no rounded
+    /// corners. Active cell shows a thin blue outline.
     private var thumbnailStrip: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: RDSpace.xs + 2) {
+                HStack(spacing: 1) {
                     ForEach(Array(store.photos.enumerated()), id: \.element.id) { idx, p in
                         LightboxStripCell(
                             photo: p,
@@ -181,18 +234,21 @@ struct LightboxContents: View {
                         )
                         .id(p.id)
                         .onTapGesture {
-                            // Jump directly to this photo.
                             store.openLightbox(on: p)
                         }
                     }
                 }
-                .padding(.horizontal, RDSpace.m)
+                .padding(.horizontal, RDSpace.s)
                 .padding(.vertical, RDSpace.s)
             }
-            .frame(height: 96)
-            .background(RDColor.stageBlack.opacity(0.6))
+            .frame(height: 64)
+            .background(RDColor.surfaceBase)
+            .overlay(alignment: .top) {
+                Rectangle()
+                    .fill(RDColor.hairlineStrong)
+                    .frame(height: 0.5)
+            }
             .onChange(of: photo.id) { newID in
-                // Auto-scroll the strip so the current cell is always visible.
                 withAnimation(.easeInOut(duration: 0.2)) {
                     proxy.scrollTo(newID, anchor: .center)
                 }
@@ -202,8 +258,8 @@ struct LightboxContents: View {
 }
 
 /// One cell in the lightbox's bottom strip. Smaller than the grid cell;
-/// shows the thumbnail with an accent border when current and a star/reject
-/// overlay. Tapping jumps the main view to that photo.
+/// shows the thumbnail with a thin blue outline when current and a tiny
+/// star rating overlay in the bottom-left when rated.
 struct LightboxStripCell: View {
     @ObservedObject var photo: Photo
     let index: Int
@@ -216,17 +272,16 @@ struct LightboxStripCell: View {
                 if let thumb = photo.thumbnail {
                     Image(nsImage: thumb)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        .aspectRatio(contentMode: .fill)
                 } else {
                     ProgressView()
                         .controlSize(.small)
                         .tint(RDColor.textOnStage)
                 }
             }
-            .frame(width: 80, height: 80)
-            .clipShape(RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous))
+            .frame(width: 96, height: 48)
 
-            // Pixelmator-sent badge (top-left) — mirrors the grid cell.
+            // Pixelmator-sent badge (top-left)
             if photo.sentToPixelmator != nil {
                 VStack {
                     HStack {
@@ -238,33 +293,36 @@ struct LightboxStripCell: View {
                 .padding(2)
             }
 
-            // Reject badge (top-right)
+            // Reject badge (top-right) — small destructive square.
             if photo.isRejected {
-                Image(systemName: "xmark.circle.fill")
-                    .symbolRenderingMode(.palette)
-                    .foregroundStyle(.white, RDColor.destructive)
-                    .font(.caption)
+                Text("✕")
+                    .font(.system(size: 9, weight: .bold, design: .monospaced))
+                    .foregroundStyle(RDColor.textOnStage)
+                    .frame(width: 14, height: 14)
+                    .background(RDColor.destructive)
                     .padding(2)
             }
         }
+        // Active = thin blue outline; idle = hairline. No rounded corners.
         .overlay(
-            RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
+            Rectangle()
                 .strokeBorder(
-                    isCurrent ? RDColor.accentPrimary : RDColor.textOnStage.opacity(0.2),
-                    lineWidth: isCurrent ? 2 : 1
+                    isCurrent ? RDColor.accentPrimary : RDColor.hairline,
+                    lineWidth: isCurrent ? 1 : 1
                 )
         )
-        .overlay(alignment: .bottom) {
-            // Star rating in tiny form
+        .opacity(isCurrent ? 1.0 : 0.7)
+        // Saturation drop on idle cells to draw eye to the active one.
+        .saturation(isCurrent ? 1.0 : 0.7)
+        // Star rating overlay (bottom-left, only when rated)
+        .overlay(alignment: .bottomLeading) {
             if photo.starRating > 0 {
-                HStack(spacing: 1) {
-                    ForEach(1...photo.starRating, id: \.self) { _ in
-                        Image(systemName: "star.fill")
-                            .font(.system(size: 7))
-                            .foregroundStyle(RDColor.starActive)
-                    }
-                }
-                .padding(.bottom, 2)
+                Text(String(repeating: "★", count: photo.starRating))
+                    .font(.system(size: 8, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(RDColor.starActive)
+                    .textShadow(.init(color: .black.opacity(0.8), radius: 1, x: 0, y: 0))
+                    .padding(.bottom, 2)
+                    .padding(.leading, 3)
             }
         }
         .help("\(photo.fileName) (Photo \(index + 1))")

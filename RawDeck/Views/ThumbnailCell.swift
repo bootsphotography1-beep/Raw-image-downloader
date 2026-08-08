@@ -1,13 +1,23 @@
 import SwiftUI
 import AppKit
 
-/// One cell in the grid. Shows the thumbnail, filename, star rating overlay,
-/// and a reject X. Click selects, double-click opens in Pixelmator.
+/// One cell in the grid.
+///
+/// Design discipline (v2):
+///  - NO filename + star row below the photo. The photo IS the work; the
+///    filename lives on the lightbox's meta strip and the rating lives in
+///    a tiny overlay. Real Lightroom/Capture One cells don't have a label
+///    under each thumb.
+///  - Aspect ratio 3:2 (RAW native) instead of 1:1 (placeholder square).
+///  - Cells abut each other (1px gap) like a contact sheet. No rounded
+///    corners on cells. The selected state is a thin blue inset rail.
+///  - Hover state: no scale transform, no scale animation. Just a hairline
+///    border that brightens. Cells are static; the data is the focus.
 ///
 /// The single-tap handler is attached with `.simultaneousGesture` and
-/// inspects `NSEvent.clickCount` so it only fires on the *first* click
-/// of a sequence — a double-click then opens in Pixelmator without
-/// also leaving the photo selected.
+/// inspects `NSEvent.clickCount` so it only fires on the *first* click of
+/// a sequence — a double-click then opens in Pixelmator without also
+/// leaving the photo selected. (Kept from v1.)
 struct ThumbnailCell: View {
     @ObservedObject var photo: Photo
     @EnvironmentObject var store: PhotoStore
@@ -17,23 +27,22 @@ struct ThumbnailCell: View {
     }
 
     var body: some View {
-        VStack(spacing: RDSpace.xs + 2) {
+        VStack(spacing: 0) {
             ZStack(alignment: .topTrailing) {
-                // Thumbnail area
+                // Thumbnail area — true 3:2 native RAW aspect, no label below.
                 ZStack {
                     RDColor.surfaceRaised
 
                     if let thumb = photo.thumbnail {
                         Image(nsImage: thumb)
                             .resizable()
-                            .aspectRatio(contentMode: .fit)
+                            .aspectRatio(contentMode: .fill)
                     } else if photo.thumbnailLoadAttempted {
                         // Decode failed (QL returned nil + embedded-JPEG
                         // fallback also failed). Show a recognizable
                         // placeholder so the user knows the cell isn't
                         // just slow to load. Tooltip surfaces the
-                        // diagnostic reason so the user can see *why*
-                        // (useful for stubborn CR3 files on macOS 27).
+                        // diagnostic reason so the user can see *why*.
                         VStack(spacing: RDSpace.xs) {
                             Image(systemName: "photo.badge.exclamationmark")
                                 .font(.title)
@@ -44,7 +53,6 @@ struct ThumbnailCell: View {
                         }
                         .help(photo.lastThumbnailError ?? "Thumbnail generation failed")
                     } else {
-                        // Still loading — show the spinner.
                         VStack {
                             ProgressView()
                                 .controlSize(.small)
@@ -54,11 +62,20 @@ struct ThumbnailCell: View {
                                 .foregroundStyle(RDColor.textSecondary)
                         }
                     }
+
+                    // Reject desaturation overlay (top of thumbnail).
+                    // Doesn't fully hide the photo, just marks it as
+                    // visually "off" so the user can spot rejects in
+                    // the grid without a separate panel.
+                    if photo.isRejected {
+                        Color.black.opacity(0.42)
+                        Color.white.opacity(0.08)
+                            .blendMode(.overlay)
+                    }
+
                     // Pixelmator-sent badge — top-left of the cell, only
                     // rendered after the user has actually opened this photo
-                    // in Pixelmator Pro (Photo.sentToPixelmator is set in
-                    // PhotoStore.openSelectionInPixelmator on a successful
-                    // launch). Top-right is reserved for the reject X.
+                    // in Pixelmator Pro. Top-right is reserved for the rating.
                     if photo.sentToPixelmator != nil {
                         VStack {
                             HStack {
@@ -68,36 +85,52 @@ struct ThumbnailCell: View {
                             Spacer()
                         }
                     }
+
+                    // Star rating — tiny mono overlay, bottom-left, only
+                    // shown when rated. No row of 5 stars under the photo.
+                    if photo.starRating > 0 {
+                        VStack {
+                            Spacer()
+                            HStack {
+                                Text(String(repeating: "★", count: photo.starRating))
+                                    .font(RDType.microMono)
+                                    .foregroundStyle(RDColor.starActive)
+                                    .padding(.horizontal, 4)
+                                    .padding(.vertical, 1)
+                                    .background(Color.black.opacity(0.55))
+                                Spacer()
+                            }
+                        }
+                    }
                 }
                 .frame(maxWidth: .infinity)
-                .aspectRatio(1, contentMode: .fit)
+                .aspectRatio(3.0/2.0, contentMode: .fill)
                 .clipped()
 
-                // Reject X badge (top-right) — destructive color from the
-                // design system, not the system .red which can shift in
-                // dark mode.
+                // Reject X — solid square in the top-right corner (not a
+                // rounded badge). Visual signal: "this is rejected" without
+                // a giant SF Symbol that competes with the photo.
                 if photo.isRejected {
-                    Image(systemName: "xmark.circle.fill")
-                        .symbolRenderingMode(.palette)
-                        .foregroundStyle(.white, RDColor.destructive)
-                        .font(.title2)
-                        .padding(RDSpace.xs + 2)
+                    Text("✕")
+                        .font(.system(size: 10, weight: .bold, design: .monospaced))
+                        .foregroundStyle(RDColor.textOnStage)
+                        .frame(width: 16, height: 16)
+                        .background(RDColor.destructive)
+                        .padding(2)
                 }
             }
+            // Selected = inset 2px blue rail on every side. Hovered =
+            // hairline. Default = nothing. (No rounded corners — contact sheet.)
             .overlay(
-                RoundedRectangle(cornerRadius: RDRadius.card, style: .continuous)
+                Rectangle()
                     .strokeBorder(
                         isSelected ? RDColor.accentPrimary :
-                            (store.hoveredPhotoID == photo.id ? RDColor.hairlineAccent : Color.clear),
+                            (store.hoveredPhotoID == photo.id ? RDColor.hairlineAccent : RDColor.hairline),
                         lineWidth: isSelected ? 2 : 1
                     )
             )
-            .background(
-                RDColor.surfaceBase.opacity(isSelected ? 0.04 : 0)
-            )
             // Track hover so the spacebar (handled in ContentView) knows
-            // which photo to open the lightbox on. SwiftUI's onHover is
-            // a simple in/out callback — we mirror the state to the store.
+            // which photo to open the lightbox on.
             .onHover { hovering in
                 if hovering {
                     store.hoveredPhotoID = photo.id
@@ -107,17 +140,6 @@ struct ThumbnailCell: View {
                     store.hoveredPhotoID = nil
                 }
             }
-
-            // Filename + stars
-            VStack(spacing: 2) {
-                Text(photo.fileName)
-                    .font(RDType.caption)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .foregroundStyle(RDColor.textPrimary)
-
-                RDStarRow(rating: photo.starRating, isRejected: photo.isRejected)
-            }
         }
         .contentShape(Rectangle())
         // Double-click opens in Pixelmator. Attached first so it has priority
@@ -125,19 +147,13 @@ struct ThumbnailCell: View {
         .onTapGesture(count: 2) {
             store.openSelectionInPixelmator(photo: photo)
         }
-        // Single-click selects, but ONLY if this is the first click of a
-        // sequence (NSEvent.clickCount == 1 at gesture time). When the user
-        // is mid-double-click, clickCount will be 2 and we skip the select.
+        // Cmd-click toggles additively.
         .simultaneousGesture(
             TapGesture().modifiers(.command).onEnded {
-                // Cmd-click toggles additively, regardless of click count.
                 store.select(photo.id, additive: true)
             }
         )
         .onTapGesture {
-            // Plain click: only select if not also a double-click.
-            // (SwiftUI's count:1 tap fires first; count:2 swallows subsequent
-            // taps within the system double-click interval.)
             let additive = NSEvent.modifierFlags.contains(.command)
             store.select(photo.id, additive: additive)
         }
@@ -162,4 +178,3 @@ struct ThumbnailCell: View {
         }
     }
 }
-

@@ -1,33 +1,36 @@
 import SwiftUI
 import AppKit
 
-/// The main photo grid. Adaptive columns: as many as fit at the current width,
-/// each cell minimum 150px. LazyVGrid means we only render visible cells.
+/// The main photo grid.
 ///
-/// Reads from `store.visiblePhotos` (the filter-and-sorted subset), NOT
-/// `store.photos` directly — so when the user picks a sort or rating
-/// filter, only matching photos show up.
+/// Design discipline (v2):
+///  - Contact-sheet style: cells touch each other (1px gap), no padding
+///    ring, 3:2 native RAW aspect. This is how Lightroom / Capture One /
+///    Photo Mechanic do it.
+///  - Empty-state inside the grid (filter hides everything) is a single
+///    mono line, not a giant icon + headline + button.
+///  - LazyVGrid is unchanged — it only renders visible cells. The cap
+///    on in-flight thumbnails lives in PhotoStore.loadThumbnails.
 struct PhotoGridView: View {
     @EnvironmentObject var store: PhotoStore
 
+    /// Column template: 3:2 aspect cells, min 220pt wide, max 320pt wide.
+    /// 1pt gap so the cell's hairline border renders cleanly between cells.
     private let columns: [GridItem] = [
-        GridItem(.adaptive(minimum: 150, maximum: 220), spacing: 12)
+        GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 1)
     ]
 
     var body: some View {
-        // Empty-state inside the grid when the filter hides everything.
-        // The toolbar/filterbar still shows the raw count so the user
-        // knows what's hidden.
         if store.visiblePhotos.isEmpty && !store.photos.isEmpty {
             emptyFilteredState
         } else {
             ScrollView {
-                LazyVGrid(columns: columns, spacing: 12) {
+                LazyVGrid(columns: columns, spacing: 1) {
                     ForEach(Array(store.visiblePhotos.enumerated()), id: \.element.id) { idx, photo in
                         ThumbnailCell(photo: photo)
                             .onAppear {
                                 // Lazy-load thumbnails for cells coming into view.
-                                // Note: the visiblePhotos index can shift as the
+                                // The visiblePhotos index can shift as the
                                 // filter/sort changes, but `loadThumbnails`
                                 // dedupes by photo id, so reloading the same
                                 // range multiple times is harmless.
@@ -37,9 +40,9 @@ struct PhotoGridView: View {
                             }
                     }
                 }
-                .padding(12)
+                .padding(0)
             }
-            .background(Color(NSColor.textBackgroundColor))
+            .background(RDColor.surfaceBase)
         }
     }
 
@@ -63,25 +66,26 @@ struct PhotoGridView: View {
         return parts.isEmpty ? "no filter" : parts.joined(separator: ", ")
     }
 
-    /// Shown when the filter hides every photo. Tells the user what's
-    /// happening and gives a one-click way to clear the filter.
+    /// Shown when the filter hides every photo. Single mono line + click-to-clear.
+    /// No icon, no headline. Matches the rest of the v2 chrome.
     private var emptyFilteredState: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "line.3.horizontal.decrease.circle")
-                .font(.system(size: 48))
-                .foregroundColor(.secondary)
-            Text("No photos match the current filter")
-                .font(.headline)
-            Text("You have \(store.photos.count) photos in this folder, but none match the current filter (\(filterDescription)).")
-                .font(.caption)
-                .foregroundColor(.secondary)
-                .multilineTextAlignment(.center)
-            Button("Clear filter") {
+        VStack(spacing: RDSpace.s) {
+            Text("no photos match")
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textTertiary)
+            Text(filterDescription)
+                .font(RDType.microMono)
+                .foregroundStyle(RDColor.textSecondary)
+            Button("clear filter") {
                 store.resetFilters()
             }
-            .controlSize(.large)
+            .buttonStyle(.plain)
+            .font(RDType.microMono)
+            .foregroundStyle(RDColor.accentPrimary)
+            .padding(.top, RDSpace.xs)
+            .help("Show every photo in the folder")
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color(NSColor.textBackgroundColor))
+        .background(RDColor.surfaceBase)
     }
 }

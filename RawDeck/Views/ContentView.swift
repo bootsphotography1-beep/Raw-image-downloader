@@ -208,13 +208,19 @@ struct ContentView: View {
                 HiddenKeyButton(key: "a", modifiers: .command) {
                     store.selectAll()
                 }
-                HiddenKeyButton(key: .escape, modifiers: []) {
-                    if store.lightboxPhotoID != nil {
-                        store.closeLightbox()
-                    } else {
-                        store.deselectAll()
-                    }
-                }
+                // Cmd-P: toggle Colorway Parser mode (matches the web design's
+                        // floating button affordance, just routed through a keyboard
+                        // shortcut so we don't need another UI element).
+                        HiddenKeyButton(key: "p", modifiers: .command) {
+                            store.mode = store.mode == .colorwayParser ? .library : .colorwayParser
+                        }
+                        HiddenKeyButton(key: .escape, modifiers: []) {
+                            if store.lightboxPhotoID != nil {
+                                store.closeLightbox()
+                            } else {
+                                store.deselectAll()
+                            }
+                        }
             }
         }
     }
@@ -247,8 +253,25 @@ struct StatusBarView: View {
         }
     }
 
-    @ViewBuilder
-    private var libraryStatus: some View {
+    /// Single stat row for the v2 status bar. Mono label + value, with the
+        /// value color reflecting state (active count in accent, rejected in
+        /// destructive).
+        @ViewBuilder
+        private func Stat(label: String, value: Int, foregroundStyle: Color) -> some View {
+            HStack(spacing: 5) {
+                Text(label)
+                    .font(RDType.microMono)
+                    .foregroundStyle(RDColor.textTertiary)
+                Text("\(value)")
+                    .font(RDType.captionMonoEmph)
+                    .foregroundStyle(foregroundStyle)
+                    .monospacedDigit()
+            }
+            .padding(.trailing, RDSpace.m)
+        }
+
+        @ViewBuilder
+        private var libraryStatus: some View {
         if store.isLoading {
             ProgressView()
                 .controlSize(.small)
@@ -280,15 +303,23 @@ struct StatusBarView: View {
                 .foregroundStyle(RDColor.textSecondary)
                 .monospacedDigit()
             } else {
-            Text("\(store.photos.count) photos")
-                .font(RDType.caption)
-                .foregroundStyle(RDColor.textSecondary)
-            if !store.selectedIDs.isEmpty {
-                Text("· \(store.selectedIDs.count) selected")
-                    .font(RDType.caption)
-                    .foregroundStyle(RDColor.accentPrimary)
-            }
-            }
+                        // Idle: 4 mono stats. visible / kept / rejected / total.
+                        // The `kept` count is the number of rated-or-selected photos —
+                        // useful at a glance to see progress through a cull.
+                        Stat(label: "visible", value: store.visibleCount)
+                            .foregroundStyle(store.visibleCount != store.photos.count
+                                             ? RDColor.accentPrimary
+                                             : RDColor.textPrimary)
+                        Stat(label: "kept", value: store.selectedIDs.count)
+                            .foregroundStyle(store.selectedIDs.isEmpty
+                                             ? RDColor.textPrimary
+                                             : RDColor.accentPrimary)
+                        Stat(label: "rejected", value: store.rejectedCount)
+                            .foregroundStyle(store.rejectedCount > 0
+                                             ? RDColor.destructive
+                                             : RDColor.textPrimary)
+                        Stat(label: "total", value: store.photos.count)
+                        }
     }
 
     @ViewBuilder

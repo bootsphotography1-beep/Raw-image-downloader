@@ -1,185 +1,91 @@
 import SwiftUI
 import AppKit
 
-/// Filter bar shown above the photo grid. Lightroom-style — a horizontal
-/// strip with the filter controls and a status text. Sits between the
-/// ToolbarView (sort + counts) and the PhotoGridView (the actual photos).
+/// Filter bar shown above the photo grid.
+///
+/// Design discipline (v2):
+///  - Single row of mono keys + toggles. NOT two stacked pill bars.
+///  - Rating keys cycle through 3 states (off → minimum → exact → off)
+///    just like v1 — the store API is unchanged. The visual presentation
+///    is just tighter: mono labels, no rounded pills, accent-blue
+///    background for the active state.
+///  - Same filtering semantics as before, just rendered with pro-tool
+///    chrome. The user can still click ★3 to "show ★3 and up", and click
+///    it again to switch to "exact ★3 only", and again to clear.
 ///
 /// Layout (left to right):
-/// - "Showing N of M" status (e.g. "Showing 247 of 1,243")
-/// - "· ★4 and up" / "· ★4 only" hint when a rating filter is active
-/// - 5 star buttons (★1 through ★5). Clicking cycles through three states:
-///     off → "≥N" (minimum) → "=N only" (exact) → off
-///   so the user can isolate a single rating bucket ("show me ONLY 1-stars")
-///   for targeted culling/delete.
-/// - "Rejects only" pill — when on, only rejected photos show (inverse of
-///   "Hide rejected"). Useful for reviewing your rejects before trashing.
-/// - "Hide rejected" pill — when on, rejected photos are hidden.
-/// - Clear (×) button when any filter is active.
+///  - Section label "FILTER" — uppercase tracked mono
+///  - 5 star keys (★1 … ★5) showing current state via background color
+///  - Section label "REJECTS" + 2 toggle keys (hide / only)
+///  - Clear filter × (only when any filter is active)
 struct FilterBarView: View {
     @EnvironmentObject var store: PhotoStore
 
-    /// True when any filter is narrowing the grid below the raw photo count.
     var hasActiveFilter: Bool {
         store.ratingFilterMode != .none || store.hideRejected || store.showRejectsOnly
     }
 
     var body: some View {
-        HStack(spacing: RDSpace.m) {
-            // Status text
-            HStack(spacing: RDSpace.xs + 2) {
-                if hasActiveFilter {
-                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                        .foregroundStyle(RDColor.accentPrimary)
-                }
-                Text(statusText)
-                    .font(RDType.caption)
-                    .foregroundStyle(RDColor.textSecondary)
-            }
-
-            Spacer()
-
-            // Rating floor — 5 star buttons. Each button cycles through
-            // three states (off → minimum → exact → off). The currently-
-            // active state is highlighted: minimum = dim amber background,
-            // exact = bright amber background with a small "=" badge.
-            HStack(spacing: 2) {
+        HStack(spacing: 0) {
+            SectionLabel("Filter")
+            // 5 star keys. Each cycles through 3 states via store.cycleRatingFilter.
+            HStack(spacing: 1) {
                 ForEach(1...5, id: \.self) { i in
-                    StarFilterButton(stars: i)
+                    StarKey(stars: i)
                 }
             }
+            .padding(.leading, RDSpace.s)
 
-            // Clear filter — only visible when a filter is active.
+            Divider().frame(height: 16).padding(.horizontal, RDSpace.m)
+
+            SectionLabel("Rejects")
+            RejectKey(label: "hide", isActive: store.hideRejected) {
+                store.toggleHideRejected()
+            }
+            RejectKey(label: "only", isActive: store.showRejectsOnly) {
+                store.toggleShowRejectsOnly()
+            }
+
             if hasActiveFilter {
+                Divider().frame(height: 16).padding(.horizontal, RDSpace.m)
                 Button {
                     store.resetFilters()
                 } label: {
-                    Image(systemName: "xmark.circle.fill")
+                    Text("×")
+                        .font(RDType.microMono)
                         .foregroundStyle(RDColor.textSecondary)
                 }
                 .buttonStyle(.plain)
-                .help("Clear all filters (show every photo)")
+                .help("Clear all filters")
             }
 
-            Divider().frame(height: 16)
-
-            // Reject controls — two pill buttons that are mutually
-            // exclusive. Only one can be active at a time.
-            //
-            // "Rejects only" (left): when on, ONLY rejected photos are
-            // shown. Useful for reviewing your X-marked photos before
-            // bulk-deleting them ("let me see what I marked X, then
-            // select-all and trash").
-            //
-            // "Hide rejected" (right): when on, rejected photos are
-            // hidden from the grid (so you can focus on the keepers).
-            // Off (default): rejected photos are shown normally.
-            HStack(spacing: RDSpace.xs) {
-                Button {
-                    store.toggleShowRejectsOnly()
-                } label: {
-                    HStack(spacing: RDSpace.xs) {
-                        Image(systemName: store.showRejectsOnly
-                              ? "xmark.circle.fill"
-                              : "xmark.circle")
-                            .font(.caption)
-                        Text(store.showRejectsOnly ? "Rejects only" : "Rejects only")
-                            .font(RDType.caption)
-                    }
-                    .padding(.horizontal, RDSpace.s)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(store.showRejectsOnly
-                                  ? RDColor.destructive
-                                  : RDColor.surfaceElevated)
-                    )
-                    .foregroundStyle(store.showRejectsOnly ? RDColor.textOnStage : RDColor.textSecondary)
-                }
-                .buttonStyle(.plain)
-                .help(store.showRejectsOnly
-                      ? "Showing only rejected photos. Click to show everything."
-                      : "Show only photos marked with X (rejected).")
-
-                Button {
-                    store.toggleHideRejected()
-                } label: {
-                    HStack(spacing: RDSpace.xs) {
-                        Image(systemName: store.hideRejected ? "eye.slash.fill" : "eye.slash")
-                            .font(.caption)
-                        Text(store.hideRejected ? "Hiding rejected" : "Hide rejected")
-                            .font(RDType.caption)
-                    }
-                    .padding(.horizontal, RDSpace.s)
-                    .padding(.vertical, 3)
-                    .background(
-                        Capsule(style: .continuous)
-                            .fill(store.hideRejected
-                                  ? RDColor.destructiveDim
-                                  : RDColor.surfaceElevated)
-                    )
-                    .foregroundStyle(store.hideRejected ? RDColor.destructive : RDColor.textSecondary)
-                }
-                .buttonStyle(.plain)
-                .help(store.hideRejected
-                      ? "Show rejected photos again"
-                      : "Hide rejected photos from the grid")
-            }
+            Spacer()
         }
+        .frame(height: 28)
         .padding(.horizontal, RDSpace.l)
-        .padding(.vertical, RDSpace.xs + 2)
-        .background(RDColor.surfaceRaised)
+        .background(RDColor.surfaceBase)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(RDColor.hairline)
                 .frame(height: 0.5)
         }
     }
-
-    /// "Showing N of M" text. Includes the rating filter suffix when active
-    /// ("· ★3 and up" or "· ★3 only") and the rejects-mode suffix.
-    private var statusText: String {
-        let shown = store.visibleCount
-        let total = store.photos.count
-        var parts: [String] = []
-        parts.append("Showing \(shown) of \(total)")
-        switch store.ratingFilterMode {
-        case .none:
-            break
-        case .minimum(let n):
-            let suffix = n == 5 ? "★5 only" : "★\(n) and up"
-            parts.append(suffix)
-        case .exact(let n):
-            parts.append("★\(n) only")
-        }
-        if store.showRejectsOnly {
-            parts.append("rejects only")
-        } else if store.hideRejected {
-            parts.append("rejects hidden")
-        }
-        return parts.joined(separator: " · ")
-    }
 }
 
-/// One button in the rating-filter row. Shows `stars` filled stars
-/// (warm amber) plus `5 - stars` outlined stars, with state-specific
-/// styling to indicate which mode the button is in.
+// MARK: - Star key (rating filter button)
+
+/// A single star filter key. Shows `stars` filled stars. Background
+/// color indicates current mode:
+///  - .none      → transparent (idle)
+///  - .minimum   → starActiveDim (warm amber tint)
+///  - .exact     → starActive.opacity(0.45) (bright amber)
 ///
-/// State-derived styling:
-/// - `.none` for that star (filter inactive for this bucket): dim/no
-///   background, regular amber stars
-/// - `.minimum(stars)` (filter is "≥N" — showing this star and above):
-///   amber-tinted background
-/// - `.exact(stars)` (filter is "=N only" — showing exactly this bucket):
-///   bright amber background with a small "=" badge next to the stars
-///
-/// Clicking cycles the filter through the three states for this star.
-/// See `PhotoStore.cycleRatingFilter(to:)` for the full transition rules.
-struct StarFilterButton: View {
+/// Clicking calls `store.cycleRatingFilter(to:)` which advances through
+/// the three states. The store API is unchanged.
+private struct StarKey: View {
     @EnvironmentObject var store: PhotoStore
     let stars: Int
 
-    /// The current mode of this star's filter, or `.none` if not active.
     private var currentMode: PhotoStore.RatingFilterMode {
         switch store.ratingFilterMode {
         case .none: return .none
@@ -193,63 +99,85 @@ struct StarFilterButton: View {
         Button {
             store.cycleRatingFilter(to: stars)
         } label: {
-            HStack(spacing: 2) {
-                RDStarRow(
-                    rating: stars,
-                    size: 13,
-                    isInteractive: false
-                )
-                if currentMode == .exact(stars) {
+            HStack(spacing: 3) {
+                // 5-star glyph for this bucket.
+                Text(String(repeating: "★", count: stars) +
+                     String(repeating: "·", count: max(0, 5 - stars)))
+                    .font(RDType.microMono)
+                    .foregroundStyle(foregroundColor)
+                if case .exact = currentMode {
                     Text("=")
-                        .font(.system(size: 11, weight: .bold, design: .default))
+                        .font(RDType.microMono)
                         .foregroundStyle(RDColor.starActive)
                 }
             }
+            .padding(.horizontal, RDSpace.s)
+            .padding(.vertical, 3)
+            .background(Rectangle().fill(backgroundFill))
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, RDSpace.xs)
-        .padding(.vertical, 2)
-        .background(
-            RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
-                .fill(backgroundFill)
-        )
-        .overlay(
-            RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
-                .strokeBorder(borderColor, lineWidth: 1)
-        )
         .help(helpText)
     }
 
-    /// Background color depends on which mode this star's filter is in.
+    private var foregroundColor: Color {
+        switch currentMode {
+        case .none: return RDColor.textSecondary
+        case .minimum: return RDColor.textPrimary
+        case .exact: return RDColor.textPrimary
+        }
+    }
+
     private var backgroundFill: Color {
         switch currentMode {
-        case .none:
-            return .clear
-        case .minimum:
-            return RDColor.starActiveDim
-        case .exact:
-            return RDColor.starActive.opacity(0.35)
-        }
-    }
-
-    /// Border color depends on mode. None = no border, exact = bright.
-    private var borderColor: Color {
-        switch currentMode {
         case .none: return .clear
-        case .minimum: return RDColor.starActive.opacity(0.30)
-        case .exact: return RDColor.starActive.opacity(0.70)
+        case .minimum: return RDColor.starActiveDim
+        case .exact: return RDColor.starActive.opacity(0.45)
         }
     }
 
-    /// Tooltip text reflects the current mode and what the next click does.
     private var helpText: String {
         switch currentMode {
         case .none:
-            return "Click: show \(stars)+ stars · click again for exact \(stars)-only"
+            return "Click: ★\(stars) and up · click again for exact ★\(stars)-only"
         case .minimum:
-            return "Currently showing \(stars)+ stars · Click to switch to \(stars)-only · Click again to clear"
+            return "Currently ★\(stars) and up · Click for exact · Click again to clear"
         case .exact:
-            return "Currently showing ONLY \(stars)-star photos · Click to clear filter"
+            return "Currently ★\(stars) only · Click to clear"
         }
+    }
+}
+
+// MARK: - Reject toggle key
+
+/// Mono text key for hide/only reject toggles. Active state is the
+/// destructive color. Inactive is hairline.
+private struct RejectKey: View {
+    let label: String
+    let isActive: Bool
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            Text(label)
+                .font(RDType.microMono)
+                .foregroundStyle(isActive ? RDColor.textOnStage : RDColor.textTertiary)
+                .padding(.horizontal, RDSpace.s)
+                .padding(.vertical, 3)
+                .background(Rectangle().fill(isActive ? RDColor.destructive : .clear))
+        }
+        .buttonStyle(.plain)
+        .padding(.leading, 1)
+    }
+}
+
+// MARK: - Section label (uppercase tracked mono)
+
+private struct SectionLabel: View {
+    let title: String
+    init(_ title: String) { self.title = title }
+    var body: some View {
+        Text(title.uppercased())
+            .font(RDType.microMono)
+            .tracking(1.8)
+            .foregroundStyle(RDColor.textTertiary)
     }
 }

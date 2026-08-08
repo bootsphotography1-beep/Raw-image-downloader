@@ -1,42 +1,60 @@
 import SwiftUI
 import AppKit
 
-/// Top toolbar: back-to-drop-zone button, folder name + count, a Sort
-/// menu (Lightroom-style: single dropdown button labelled with the
-/// current sort), star-count badges, and the photo actions (Open in
-/// Pixelmator / Reveal / Trash).
+/// Top toolbar.
+///
+/// Design discipline (v2):
+///  - One row, 32pt tall, dense. No padding ring.
+///  - All action labels in sans-serif at 12pt; all metadata (counts,
+///    star counts, rejected count) in monospace.
+///  - Hotkey hints inline next to the action they belong to.
+///  - No rounded pill backgrounds on the star-count chips — they sit as
+///    mono text next to the divider.
+///  - Wordmark is a single uppercase tracked label, not a "logo + dot"
+///    pair (which was the v1 SaaS-look mistake).
+///
+/// All action methods on PhotoStore are unchanged — this is a chrome
+/// refactor only.
 struct ToolbarView: View {
     @EnvironmentObject var store: PhotoStore
 
     var body: some View {
-        HStack(spacing: RDSpace.m) {
-            // Back to drop zone
-            Button {
+        HStack(spacing: 0) {
+            // Wordmark — single uppercase tracked label.
+            Text("RAWDECK")
+                .font(RDType.microMono)
+                .tracking(1.8)
+                .foregroundStyle(RDColor.textPrimary)
+                .padding(.trailing, RDSpace.s)
+
+            VDivider()
+
+            // New Import / Close session
+            ToolbarAction(label: "New Import", hotkey: nil) {
                 store.photos = []
                 store.selectedIDs = []
                 store.currentFolder = nil
                 store.resetFilters()
-            } label: {
-                Label("New Import", systemImage: "chevron.left")
             }
-            .help("Close current session and import a different folder")
 
-            Divider().frame(height: 20)
+            VDivider()
 
-            // Folder name + photo count
+            // Folder name + count (only when a folder is loaded)
             if let folder = store.currentFolder {
                 HStack(spacing: RDSpace.xs) {
-                    Image(systemName: "folder.fill")
-                        .foregroundStyle(RDColor.textSecondary)
                     Text(folder.lastPathComponent)
                         .font(RDType.titleMedium)
-                    Text("(\(store.photos.count) photos)")
-                        .font(RDType.caption)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Text("· \(store.photos.count)")
+                        .font(RDType.captionMono)
                         .foregroundStyle(RDColor.textSecondary)
                 }
+                .padding(.horizontal, RDSpace.s)
+                VDivider()
             }
 
-            // Sort menu
+            // Sort menu — borderless button, label only.
             Menu {
                 ForEach(SortMode.allCases) { mode in
                     Button {
@@ -50,81 +68,91 @@ struct ToolbarView: View {
                     }
                 }
             } label: {
-                Label(store.sortMode.label, systemImage: store.sortMode.systemImage)
+                Text(store.sortMode.label)
+                    .font(RDType.body)
+                    .foregroundStyle(RDColor.textPrimary)
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
+            .padding(.horizontal, RDSpace.s)
             .help("Sort the grid by filename or star rating")
 
             Spacer()
 
-            // Star count badges
-            HStack(spacing: RDSpace.s) {
+            // Star count chips — mono text, no rounded backgrounds.
+            // v1 had each count inside a RoundedRectangle; v2 just shows
+            // the number in mono with a star icon. Pro tools don't box
+            // their metadata.
+            HStack(spacing: RDSpace.m) {
                 ForEach(1...5, id: \.self) { i in
                     let n = store.count(rating: i)
                     if n > 0 {
-                        HStack(spacing: 2) {
-                            Image(systemName: "star.fill")
-                                .font(.caption2)
+                        HStack(spacing: 3) {
+                            Text("★\(i)")
+                                .font(RDType.microMono)
                                 .foregroundStyle(RDColor.starActive)
                             Text("\(n)")
-                                .font(RDType.caption)
+                                .font(RDType.captionMono)
+                                .foregroundStyle(RDColor.textPrimary)
                                 .monospacedDigit()
                         }
-                        .padding(.horizontal, RDSpace.xs + 2)
-                        .padding(.vertical, 2)
-                        .background(
-                            RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
-                                .fill(RDColor.surfaceElevated)
-                        )
                     }
                 }
                 if store.rejectedCount > 0 {
-                    HStack(spacing: 2) {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.caption2)
+                    HStack(spacing: 3) {
+                        Text("✕")
+                            .font(RDType.microMono)
                             .foregroundStyle(RDColor.destructive)
                         Text("\(store.rejectedCount)")
-                            .font(RDType.caption)
+                            .font(RDType.captionMono)
+                            .foregroundStyle(RDColor.textPrimary)
                             .monospacedDigit()
                     }
-                    .padding(.horizontal, RDSpace.xs + 2)
-                    .padding(.vertical, 2)
-                    .background(
-                        RoundedRectangle(cornerRadius: RDRadius.button, style: .continuous)
-                            .fill(RDColor.destructiveDim)
-                    )
                 }
             }
+            .padding(.horizontal, RDSpace.s)
 
-            Divider().frame(height: 20)
+            VDivider()
 
-            // Actions
-            Button {
+            // Pixelmator
+            ToolbarAction(
+                label: "Open in Pixelmator",
+                hotkey: "⌘⇧O",
+                disabled: store.photos.isEmpty
+            ) {
                 store.openSelectionInPixelmator()
-            } label: {
-                Label("Open in Pixelmator", systemImage: "wand.and.stars")
             }
-            .disabled(store.photos.isEmpty)
             .help("Open selected photos (or all visible photos) in Pixelmator Pro")
 
-            Button {
+            // Reveal
+            ToolbarAction(
+                label: "Reveal",
+                hotkey: "⌘⇧R",
+                disabled: store.photos.isEmpty
+            ) {
                 store.revealSelectionInFinder()
-            } label: {
-                Label("Reveal", systemImage: "magnifyingglass")
             }
-            .disabled(store.photos.isEmpty)
             .help("Reveal selected photos in Finder")
 
-            Button {
+            // Export
+            ToolbarAction(
+                label: "Export",
+                hotkey: "⌘E",
+                disabled: store.photos.isEmpty
+            ) {
                 store.exportSelection()
-            } label: {
-                Label("Export", systemImage: "square.and.arrow.up")
             }
-            .disabled(store.photos.isEmpty)
-            .help("Copy selected photos to a folder of your choice, preserving the original .cr3 / .nef / .arw / .dng bytes (no re-encoding)")
+            .help("Copy selected photos to a folder of your choice (no re-encoding)")
 
-            Button {
+            // Write Stars — with the dirty-count badge inline as a count.
+            ToolbarAction(
+                label: store.hasUnsavedRatings
+                    ? "Write Stars (\(store.dirtyPhotoIDs.count))"
+                    : "Write Stars",
+                hotkey: "⌘S",
+                disabled: store.photos.isEmpty,
+                accent: store.hasUnsavedRatings
+            ) {
                 NSLog("RawDeck: Write Stars button clicked; dirty=\(store.dirtyPhotoIDs.count)")
                 store.writeRatingsToMetadata { written, failed, firstError in
                     NSLog("RawDeck: Write Stars completion: written=\(written) failed=\(failed) err=\(firstError ?? "none")")
@@ -144,33 +172,78 @@ struct ToolbarView: View {
                     store.alertMessage = lines.joined(separator: "\n")
                     NSLog("RawDeck: alertMessage set; current value=\(store.alertMessage ?? "nil")")
                 }
-            } label: {
-            if store.hasUnsavedRatings {
-                Label("Write Stars (\(store.dirtyPhotoIDs.count))", systemImage: "square.and.arrow.down")
-            } else {
-                Label("Write Stars", systemImage: "checkmark.circle")
             }
-            }
-            .disabled(store.photos.isEmpty)
             .help(store.hasUnsavedRatings
-                  ? "Save your current star ratings and reject flags to .xmp sidecars (Lightroom/Photos/Photo Mechanic compatible). Original RAW bytes are not modified."
-                  : "All current ratings are already saved to .xmp sidecars.")
+                  ? "Save your current star ratings and reject flags to .xmp sidecars"
+                  : "All current ratings are already saved to .xmp sidecars")
 
-            Button(role: .destructive) {
+            // Trash
+            ToolbarAction(
+                label: "Trash",
+                hotkey: "⌫",
+                disabled: store.photos.isEmpty,
+                destructive: true
+            ) {
                 _ = store.trashSelection()
-            } label: {
-                Label("Trash", systemImage: "trash")
             }
-            .disabled(store.photos.isEmpty)
             .help("Move selected photos (or all rejected photos) to the Trash")
         }
+        .frame(height: 32)
         .padding(.horizontal, RDSpace.l)
-        .padding(.vertical, RDSpace.s + 2)
         .background(RDColor.surfaceRaised)
         .overlay(alignment: .bottom) {
             Rectangle()
                 .fill(RDColor.hairline)
                 .frame(height: 0.5)
         }
+    }
+}
+
+// MARK: - Toolbar action button
+
+/// A single toolbar action. Renders as a `Button` with a text label and
+/// optional hotkey hint. No background fill — actions are text, not pills.
+private struct ToolbarAction: View {
+    let label: String
+    var hotkey: String? = nil
+    var disabled: Bool = false
+    var destructive: Bool = false
+    var accent: Bool = false
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Text(label)
+                    .font(RDType.body)
+                    .foregroundStyle(textColor)
+                if let hk = hotkey {
+                    Text(hk)
+                        .font(RDType.microMono)
+                        .foregroundStyle(RDColor.textTertiary)
+                }
+            }
+            .padding(.horizontal, RDSpace.s)
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.35 : 1)
+    }
+
+    private var textColor: Color {
+        if destructive { return RDColor.destructive }
+        if accent { return RDColor.accentPrimary }
+        return RDColor.textPrimary
+    }
+}
+
+// MARK: - Vertical divider
+
+private struct VDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(RDColor.hairlineStrong)
+            .frame(width: 1, height: 16)
+            .padding(.horizontal, RDSpace.s)
     }
 }
