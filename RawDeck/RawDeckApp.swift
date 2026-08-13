@@ -119,13 +119,28 @@ struct RawDeckApp: App {
                 Button("Select All") {
                     store.selectAll()
                 }
-                .keyboardShortcut("a", modifiers: .command)
+                // NO `.keyboardShortcut("a", modifiers: .command)` here.
+                // The NSEvent monitor in AppDelegate.handleLibraryKeyEvent
+                // is the SOLE dispatcher for Cmd-A (and Escape, Delete, X,
+                // 0, 1-5, Space, arrows). Two reasons:
+                //   1. The macOS TSM shortcut dispatcher is broken on this
+                //      user's machine (HIToolbox soft-linking failure).
+                //      The menu command's keyboardShortcut would either
+                //      no-op silently OR fire alongside the monitor —
+                //      producing a double-action.
+                //   2. The monitor is the documented source of truth
+                //      per the routing table in handleLibraryKeyEvent's
+                //      doc comment. Adding shortcut bindings here would
+                //      create the kind of double-trash bug we just fixed.
+                // The menu item still functions for mouse clicks; only
+                // the keyboard shortcut is omitted.
                 .disabled(store.mode != .library)
 
                 Button("Clear Selection") {
                     store.deselectAll()
                 }
-                .keyboardShortcut(.escape, modifiers: [])
+                // Same reason as Select All above — Escape is handled
+                // exclusively by the NSEvent monitor (keyCode 53).
                 .disabled(store.mode != .library)
 
                 Divider()
@@ -133,7 +148,13 @@ struct RawDeckApp: App {
                 Button("Move to Trash") {
                     _ = store.trashSelection()
                 }
-                .keyboardShortcut(.delete, modifiers: [])
+                // Same reason: Delete (keyCode 51) is handled exclusively
+                // by the NSEvent monitor. Having BOTH this shortcut AND
+                // the monitor fire produces the "two trash operations on
+                // the same photo, second one fails with 'file doesn't
+                // exist'" bug — that was the root cause of the user's
+                // 'moved 0 of 1 photo to Trash, 1 failed to move, Reason:
+                // _76A0498.CR3: doesn't exist' alert.
                 .disabled(store.mode != .library)
             }
 
