@@ -48,11 +48,22 @@ struct ColorwayParserView: View {
                 .foregroundStyle(RDColor.textSecondary)
                 .multilineTextAlignment(.center)
 
+            // NOTE: NO `.keyboardShortcut("o", modifiers: .command)` here on purpose.
+            // The mode-aware Cmd+O command lives in RawDeckApp.swift
+            // (CommandGroup replacing .newItem) and is properly scoped
+            // via `.disabled(store.mode != .colorwayParser)`. If we
+            // also register the shortcut on this button, we get TWO
+            // Cmd+O bindings in the app — and because this View is
+            // always in the hierarchy (just hidden via opacity 0
+            // when in Library mode), the HIDDEN binding wins and
+            // Library-mode Cmd+O opens the reference-image picker
+            // instead of the folder picker. Symptom: button reads
+            // "Load Reference" in Library mode. Fix: leave the
+            // shortcut to the menu command, which is mode-aware.
             Button("Open Image…") {
                 colorwayParser.openReferenceViaPanel()
             }
             .rdButton(.primary)
-            .keyboardShortcut("o", modifiers: .command)
 
             if let err = colorwayParser.lastError {
                 Text(err)
@@ -462,11 +473,18 @@ struct ColorwayParserView: View {
             Text("Paste (⌘V) or open (⌘O).")
                 .font(RDType.caption)
                 .foregroundStyle(RDColor.textSecondary)
+            // Same fix as the Library-mode Open Image… button above:
+            // NO `.keyboardShortcut("o", modifiers: [.command, .shift])`
+            // here, because the menu command at RawDeckApp.swift line 104
+            // (Open in Pixelmator Pro) already handles Cmd+Shift+O via
+            // a mode-aware `.disabled(store.mode != .library)` binding.
+            // Without this removal, Cmd+Shift+O would fire the Colorway
+            // "Open RAW…" target picker even when the user is in Library
+            // mode expecting Pixelmator to open.
             Button("Open RAW…") {
                 colorwayParser.openTargetViaPanel()
             }
             .rdButton(.secondary)
-            .keyboardShortcut("o", modifiers: [.command, .shift])
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(RDColor.surfaceRaised.opacity(0.6))
