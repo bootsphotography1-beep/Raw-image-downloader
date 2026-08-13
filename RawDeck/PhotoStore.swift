@@ -1026,29 +1026,39 @@ final class PhotoStore: ObservableObject {
         // user can keep culling without an extra Esc/click. If the grid
         // is now empty, close the lightbox.
         if lightboxPhotoID != nil, let p = lightboxPhoto {
-            let trashedID = p.id
             // Capture the position BEFORE removal so we know which way to advance.
+            let trashedID = p.id
             let priorIdx = visiblePhotos.firstIndex(where: { $0.id == trashedID })
-            photos.removeAll { $0.id == trashedID }
-            selectedIDs = []
-
-            // Advance the lightbox to a neighbour, or close if none left.
-            if visiblePhotos.isEmpty {
-                lightboxPhotoID = nil
-            } else {
-                // Prefer the photo at the same index (now the "next" one);
-                // fall back to the new last photo if we trashed the tail.
-                let targetIdx = min(priorIdx ?? 0, visiblePhotos.count - 1)
-                let next = visiblePhotos[targetIdx]
-                lightboxPhotoID = next.id
-                selectedIDs = [next.id]
-                loadPreview(for: next)
-            }
-
             let url = p.url
-            Task { [weak self] in
-                _ = ExternalAppService.moveToTrash(url)
-                _ = self
+
+            // Trash FIRST, then mutate UI state. If moveToTrash returns
+            // false (disk full, permissions, locked file, etc.), we leave
+            // the photo in `photos` and the lightbox on it so the user
+            // sees the photo wasn't actually deleted. Previous code did
+            // photos.removeAll synchronously and then async-trashed —
+            // when the async trash failed the UI showed 'gone' but the
+            // file was still on disk, and the user couldn't tell from
+            // the app that the operation had failed.
+            Task { @MainActor [weak self] in
+                guard let self = self else { return }
+                guard ExternalAppService.moveToTrash(url) else {
+                    NSLog("RawDeck: lightbox trash failed for \(url.lastPathComponent); keeping in store")
+                    return
+                }
+                // Photo IS gone from disk — now safe to remove from the
+                // in-memory list and advance the lightbox.
+                self.photos.removeAll { $0.id == trashedID }
+                self.selectedIDs = []
+
+                if self.visiblePhotos.isEmpty {
+                    self.lightboxPhotoID = nil
+                } else {
+                    let targetIdx = min(priorIdx ?? 0, self.visiblePhotos.count - 1)
+                    let next = self.visiblePhotos[targetIdx]
+                    self.lightboxPhotoID = next.id
+                    self.selectedIDs = [next.id]
+                    self.loadPreview(for: next)
+                }
             }
             return 1
         }
@@ -1061,22 +1071,21 @@ final class PhotoStore: ObservableObject {
         }()
         guard !toTrash.isEmpty else { return 0 }
 
-        let ids = Set(toTrash.map { $0.id })
         let urls = toTrash.map { $0.url }
         let total = urls.count
-
-        // Optimistically remove from the in-memory list (the trash op is
-        // reversible via Finder's Trash, but we don't want the UI to keep
-        // showing files we just told the system to remove).
-        photos.removeAll { ids.contains($0.id) }
-        selectedIDs = selectedIDs.intersection(Set(photos.map { $0.id }))
+        // Pair URLs with their Photo IDs in the SAME order as `toTrash`
+        // (since `urls` is already in `toTrash` order, and the IDs come
+        // from the same array). This lets the loop remove from `photos`
+        // by ID only after the corresponding moveToTrash succeeds.
+        // (Previously we removed ALL photos upfront, which diverged the
+        // in-memory store from disk state on cancel — photos the user
+        // thought they'd deleted were still on the SD card because the
+        // loop hadn't actually trashed them yet.)
+        let targets: [(id: UUID, url: URL)] = toTrash.map { ($0.id, $0.url) }
 
         // Cancel any in-flight trash so two Delete presses don't race
         // each other to write `trashProgress` — same cancellation pattern
-        // as `thumbnailImportTask` for the import flow. We snapshot the
-        // cancelled task's progress before cancelling so we can surface
-        // a "Trashed N of M, then cancelled" alert instead of vanishing
-        // silently.
+        // as `thumbnailImportTask` for the import flow.
         trashTask?.cancel()
         trashProgress = TrashProgress(done: 0, total: total, etaSeconds: nil)
         let startedAt = Date()
@@ -1106,14 +1115,26 @@ final class PhotoStore: ObservableObject {
                 /// final `await MainActor.run { ... }` block — same
                 /// rationale as `trashed` / `failed` sitting on Counter.
                 var wasCancelled = false
+                /// IDs of photos successfully trashed in this run.
+                /// We accumulate these in the loop and remove them from
+                /// `photos` in a SINGLE MainActor hop at the end of the
+                /// Task (after the cancel check) — that way a 201-photo
+                /// trash doesn't trigger 201 MainActor hops and starve
+                /// SwiftUI re-renders, while still preserving the
+                /// cancel-safety property: if the loop is cancelled, the
+                /// final hop runs with only the IDs that were actually
+                /// trashed, and the rest stay in `photos`.
+                var trashedIDs: [UUID] = []
             }
             let counter = Counter()
 
-            for (idx, url) in urls.enumerated() {
+            for (idx, target) in targets.enumerated() {
                 if Task.isCancelled {
                     counter.wasCancelled = true
                     break
                 }
+                let url = target.url
+                let trashedID = target.id
                 // Trash the photo. Then trash its XMP sidecar if one
                 // exists in the same folder (e.g. `IMG_1234.xmp` next
                 // to `IMG_1234.CR3`). Without this, deleting a rated
@@ -1129,6 +1150,7 @@ final class PhotoStore: ObservableObject {
                 // hadn't been written yet).
                 if ExternalAppService.moveToTrash(url) {
                     counter.trashed += 1
+                    counter.trashedIDs.append(trashedID)
                     // Best-effort sidecar follow-up. `sidecarURL(for:)`
                     // is `static` (no actor isolation), so it's safe
                     // to call from inside the detached Task body.
@@ -1180,13 +1202,36 @@ final class PhotoStore: ObservableObject {
             let trashed = counter.trashed
             let failed = counter.failed
             let wasCancelled = counter.wasCancelled
+            let successfullyTrashedIDs = counter.trashedIDs
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
+                // Bulk removal: only photos that ACTUALLY got trashed get
+                // removed from the in-memory list. On cancel, this set is
+                // smaller than `total`, and the un-trashed photos stay in
+                // `photos` and stay visible in the grid — fixing the
+                // 'cancel leaves orphans on disk but they're gone from
+                // the UI' bug. Doing this in one hop (not per-iteration)
+                // avoids hammering MainActor with 201 SwiftUI re-renders
+                // for a 201-photo trash.
+                if !successfullyTrashedIDs.isEmpty {
+                    let trashedSet = Set(successfullyTrashedIDs)
+                    self.photos.removeAll { trashedSet.contains($0.id) }
+                    self.selectedIDs = self.selectedIDs.intersection(
+                        Set(self.photos.map { $0.id })
+                    )
+                }
                 self.trashProgress = nil
                 let plural = total == 1 ? "" : "s"
                 var lines: [String] = []
                 if wasCancelled {
                     lines.append("Trashed \(trashed) of \(total) photo\(plural) before you cancelled.")
+                    // When cancelled, the remaining N-trashed photos are
+                    // still on disk. Tell the user that explicitly so
+                    // they don't think those are gone too.
+                    let remaining = total - trashed
+                    if remaining > 0 {
+                        lines.append("\(remaining) photo\(remaining == 1 ? "" : "s") left in the folder (cancel stopped the trash before they could be moved).")
+                    }
                 } else {
                     lines.append("Moved \(trashed) of \(total) photo\(plural) to Trash.")
                 }
@@ -1252,9 +1297,17 @@ final class PhotoStore: ObservableObject {
 
     /// Reveal selected photos in Finder.
     func revealSelectionInFinder() {
+        // NSWorkspace.activateFileViewerSelecting can only meaningfully
+        // select ONE file at a time — calling it in a tight loop with N
+        // files just brings Finder to the front N times and only the
+        // last call's selection sticks. For multi-select, fall back to
+        // the single representative (first) target and log a hint so
+        // the user knows the others weren't ignored on purpose.
         let targets = selectedPhotos.isEmpty ? visiblePhotos : selectedPhotos
-        for p in targets {
-            ExternalAppService.revealInFinder(p.url)
+        guard let first = targets.first else { return }
+        ExternalAppService.revealInFinder(first.url)
+        if targets.count > 1 {
+            NSLog("RawDeck: Reveal selected first of \(targets.count) files; Finder can only highlight one per activation")
         }
     }
 
@@ -1542,7 +1595,12 @@ final class PhotoStore: ObservableObject {
                     NSLog("RawDeck: sidecar write failed for \(snap.url.lastPathComponent): \(error)")
                 }
                 let done = idx + 1
-                if done % 10 == 0 || done == total {
+                // Publish progress every 5 files (not 10) so a large
+                // write shows movement within seconds — 268 candidates
+                // at 50ms each is ~13s of work, and 27 hops (every 10)
+                // meant the progress bar updated less than once a second.
+                // 5 hops instead = ~once every 250ms.
+                if done % 5 == 0 || done == total {
                     await MainActor.run { [weak self] in
                         self?.saveProgress = SaveProgress(done: done, total: total)
                     }
