@@ -498,7 +498,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // monitor so we can verify whether the monitor is firing at all
         // and which keyCode/modifiers we're seeing for each chord.
         // Comment this out once keyboard navigation works again.
-        NSLog("RawDeck: keyEvent kc=\(keyCode) mods=\(mods.rawValue) char=\(event.charactersIgnoringModifiers ?? "?")")
+        NSLog("RawDeck: keyEvent kc=%d mods=%llu char=%@", Int(keyCode), mods.rawValue, (event.charactersIgnoringModifiers ?? "?") as NSString)
 
         // Schedule an action on the main actor. Read the store INSIDE
         // the dispatched task so we don't capture AppDelegate.sharedStore
@@ -507,7 +507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("RawDeck: dispatching \(label)")
             Task { @MainActor in
                 let store = AppDelegate.sharedStore
-                NSLog("RawDeck: dispatch \(label) arrived; store=\(store != nil); mode=\(store?.mode.rawValue ?? -1)")
+                NSLog("RawDeck: dispatch \(label) arrived; store=\(store != nil); mode=\(store?.mode.rawValue ?? "nil")")
                 guard let store = store else { return }
                 guard store.mode == .library else { return }
                 action()
@@ -515,7 +515,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Cmd-A (keyCode 0) -- Select All.
-        if mods == .command, keyCode == 0 {
+        if mods == .command, keyCode == UInt16(0) {
             dispatch("Cmd-A selectAll") { AppDelegate.sharedStore?.selectAll() }
             return event
         }
@@ -528,7 +528,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Space (49) -- toggle lightbox. Open if a photo is hovered OR
         // if exactly one photo is selected (sensible default for
         // keyboard navigation); close if already open.
-        if keyCode == 49 {
+        if keyCode == UInt16(49) {
             dispatch("Space toggleLightbox") {
                 guard let store = AppDelegate.sharedStore else { return }
                 if store.lightboxPhotoID != nil {
@@ -555,20 +555,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Left (123) / Right (124) arrows -- navigate the lightbox.
         // If the lightbox is NOT open, the arrows do nothing (the grid
         // scroll view wants them).
-        if keyCode == 123 || keyCode == 124 {
+        if keyCode == UInt16(123) || keyCode == UInt16(124) {
             dispatch("Arrow lightboxStep") {
                 guard let store = AppDelegate.sharedStore else { return }
                 guard store.lightboxPhotoID != nil else {
                     NSLog("RawDeck: arrow ignored -- lightbox not open")
                     return
                 }
-                store.lightboxStep(keyCode == 123 ? -1 : 1)
+                store.lightboxStep(keyCode == UInt16(123) ? -1 : 1)
             }
             return event
         }
 
         // X (7) -- toggle reject on the rating target.
-        if keyCode == 7 {
+        if keyCode == UInt16(7) {
             dispatch("X toggleReject") {
                 guard let store = AppDelegate.sharedStore else { return }
                 if let target = store.ratingTarget {
@@ -581,7 +581,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // 0 (29) -- clear the rating.
-        if keyCode == 29 {
+        if keyCode == UInt16(29) {
             dispatch("0 clearRating") {
                 guard let store = AppDelegate.sharedStore else { return }
                 store.setRating(0, photo: store.ratingTarget)
@@ -590,7 +590,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Escape (53) -- close lightbox or deselect all.
-        if keyCode == 53 {
+        if keyCode == UInt16(53) {
             dispatch("Escape close") {
                 guard let store = AppDelegate.sharedStore else { return }
                 if store.lightboxPhotoID != nil {
@@ -604,7 +604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Delete (51, backspace) / Forward Delete (117, Fn+Delete).
         // Trash the current selection (or all rejects if no selection).
-        if keyCode == 51 || keyCode == 117 {
+        if keyCode == UInt16(51) || keyCode == UInt16(117) {
             dispatch("Delete trash") {
                 guard let store = AppDelegate.sharedStore else { return }
                 guard !store.selectedIDs.isEmpty || store.rejectedCount > 0 else { return }
@@ -616,7 +616,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 1-5 (keyCodes 18, 19, 20, 21, 23) -- set rating.
         // We dispatch these through the monitor too so they have a
         // single source of truth.
-        let ratingKeyCodes: [Int: Int] = [
+        let ratingKeyCodes: [UInt16: Int] = [
             18: 1, 19: 2, 20: 3, 21: 4, 23: 5
         ]
         if let rating = ratingKeyCodes[keyCode] {
