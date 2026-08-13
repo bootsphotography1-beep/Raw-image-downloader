@@ -257,7 +257,7 @@ struct StatusBarView: View {
         /// value color reflecting state (active count in accent, rejected in
         /// destructive).
         @ViewBuilder
-        private func Stat(label: String, value: Int, foregroundStyle: Color) -> some View {
+        private func Stat(label: String, value: Int, foregroundStyle: Color = RDColor.textPrimary) -> some View {
             HStack(spacing: 5) {
                 Text(label)
                     .font(RDType.microMono)
