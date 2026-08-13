@@ -347,6 +347,18 @@ final class PhotoStore: ObservableObject {
             // importProgress would jump straight to nil, leaving
             // the grid stuck on "Loading..." forever.
             self.startEagerThumbnailImport()
+
+            // Sweep the folder for orphan XMP sidecars — files whose
+            // sibling RAW (CR3 / NEF / etc.) has been deleted out
+            // from under us, typically by Finder or a card reader,
+            // before the LibraryWatcher was running. Without this
+            // sweep the SD card accumulates orphan sidecars on every
+            // import cycle, and on the next re-insertion the orphan
+            // could be re-interpreted as metadata for a different
+            // photo that happens to share the slot name. Runs off-
+            // main in cleanupOrphanSidecars and pops an alert only
+            // if any orphans were found.
+            self.cleanupOrphanSidecars(in: url)
         }
     }
 
@@ -397,6 +409,22 @@ final class PhotoStore: ObservableObject {
     /// Remove a photo whose underlying file disappeared. No-op if it
     /// wasn't tracked. Detaches from the visible-photos computation
     /// lazily.
+    ///
+    /// Also trash the photo's XMP sidecar (`IMG_1234.xmp` next to
+    /// `IMG_1234.CR3`) so the user's SD card doesn't accumulate
+    /// orphan sidecars over time. Without this, deleting a rated
+    /// photo via Finder (where the watcher fires but no app-side
+    /// bookkeeping happens) leaves the orphan behind, and the next
+    /// import of the same SD card sees a stale `.xmp` next to a
+    /// different photo that happens to share the slot's name -- the
+    /// cross-photo rating corruption the sidecar scheme is supposed
+    /// to prevent.
+    ///
+    /// Sidecar cleanup is best-effort. If the trash fails (e.g.
+    /// disk full, weird permissions), we log it and move on; the
+    /// user's primary action -- getting rid of the CR3 -- already
+    /// succeeded. Recovery from this minor mess is `cleanupOrphan-
+    /// Sidecars(in:)` on the next import.
     func notePhotoRemovedFromDisk(at url: URL) {
         photos.removeAll { $0.url == url }
         selectedIDs = selectedIDs.filter { id in
@@ -404,6 +432,70 @@ final class PhotoStore: ObservableObject {
         }
         if let open = lightboxPhotoID, !photos.contains(where: { $0.id == open }) {
             lightboxPhotoID = nil
+        }
+        // Detached because `notePhotoRemovedFromDisk` is called from
+        // the LibraryWatcher's FSEvent callback on the main queue;
+        // we don't want `FileManager.trashItem` blocking that queue.
+        let sidecar = MetadataService.sidecarURL(for: url)
+        Task.detached(priority: .utility) {
+            if FileManager.default.fileExists(atPath: sidecar.path) {
+                if !ExternalAppService.moveToTrash(sidecar) {
+                    NSLog("RawDeck: sidecar trash failed for \(sidecar.lastPathComponent) (photo already gone from disk)")
+                } else {
+                    NSLog("RawDeck: cleaned up orphan sidecar \(sidecar.lastPathComponent) after photo removal")
+                }
+            }
+        }
+    }
+
+    /// Walk a folder and trash every `.xmp` file whose sibling RAW
+    /// (CR3, NEF, ARW, DNG, etc.) is missing. Called once at the end
+    /// of every import to clean up legacy orphans from prior Finder /
+    /// card-reader deletions, where the LibraryWatcher wasn't running
+    /// to detect removal + dispatch sidecar cleanup.
+    ///
+    /// Best-effort: errors per file are logged, not raised. The user
+    /// gets a brief alert summarizing how many orphans were removed.
+    /// If zero orphans were found, the import just continues silently.
+    func cleanupOrphanSidecars(in folder: URL) {
+        Task.detached(priority: .utility) {
+            let fm = FileManager.default
+            guard let entries = try? fm.contentsOfDirectory(
+                at: folder,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) else {
+                return
+            }
+            let rawExts: Set<String> = [
+                "cr3", "cr2", "nef", "nrw", "arw", "srf", "sr2",
+                "raf", "dng", "orf", "rw2", "pef", "3fr", "fff",
+                "iiq", "x3f"
+            ]
+            // Build set of all RAW base names (lower-case) present in
+            // the folder. Any .xmp whose stem is NOT in this set is an
+            // orphan.
+            let presentStems = Set(entries
+                .filter { rawExts.contains($0.pathExtension.lowercased()) }
+                .map { $0.deletingPathExtension().lastPathComponent.lowercased() })
+            var orphanCount = 0
+            for entry in entries where entry.pathExtension.lowercased() == "xmp" {
+                let stem = entry.deletingPathExtension().lastPathComponent.lowercased()
+                if !presentStems.contains(stem) {
+                    if ExternalAppService.moveToTrash(entry) {
+                        orphanCount += 1
+                        NSLog("RawDeck: cleanupOrphanSidecars trashed \(entry.lastPathComponent)")
+                    } else {
+                        NSLog("RawDeck: cleanupOrphanSidecars failed to trash \(entry.lastPathComponent)")
+                    }
+                }
+            }
+            if orphanCount > 0 {
+                await MainActor.run { [weak self] in
+                    let plural = orphanCount == 1 ? "" : "s"
+                    self?.alertMessage = "Removed \(orphanCount) orphan sidecar\(plural) (no matching RAW in folder)."
+                }
+            }
         }
     }
 
