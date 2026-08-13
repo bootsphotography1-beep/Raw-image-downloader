@@ -348,6 +348,16 @@ final class PhotoStore: ObservableObject {
             // the grid stuck on "Loading..." forever.
             self.startEagerThumbnailImport()
 
+            // Clear stale dirty state from the previous folder/session.
+            // Without this, importing a new folder with N photos and a
+            // dirtyPhotoIDs set left over from the previous folder would
+            // (a) show "Write Stars (M)" where M is unrelated to this
+            // folder, and (b) try to write sidecars for photos whose IDs
+            // are no longer in this folder's `photos` array, producing
+            // no-ops that keep the progress bar at 0/268 forever.
+            // Reset to a clean slate on every import.
+            self.dirtyPhotoIDs.removeAll()
+
             // Sweep the folder for orphan XMP sidecars — files whose
             // sibling RAW (CR3 / NEF / etc.) has been deleted out
             // from under us, typically by Finder or a card reader,
@@ -1483,7 +1493,15 @@ final class PhotoStore: ObservableObject {
         // actually have a rating or reject flag — no point writing
         // empty sidecars for unrated photos.
         let candidates: [Photo] = specificIDs.map { ids in
-            photos.filter { ids.contains($0.id) }
+            // specificIDs comes from dirtyPhotoIDs, which tracks every
+            // rating mutation including clear-to-zero. Without this
+            // filter, a dirty-but-cleared photo lands in `candidates`,
+            // then `writeXMPSidecar` no-ops on it (rating=0 + reject=false),
+            // and the loop wastes an iteration without incrementing
+            // `written`. With 200+ stale dirty entries from a previous
+            // session this made the progress bar show 0/268 with no
+            // movement — the user reads it as "Write Stars is stuck".
+            photos.filter { ids.contains($0.id) && ($0.starRating > 0 || $0.isRejected) }
         } ?? photos.filter { $0.starRating > 0 || $0.isRejected }
 
         let total = candidates.count
