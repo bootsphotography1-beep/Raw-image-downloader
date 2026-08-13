@@ -178,8 +178,23 @@ enum MetadataService {
         // Only write if there's something to save. No empty sidecars.
         guard starRating > 0 || isRejected else { return }
 
-        let xmp = makeXMPContent(starRating: starRating, isRejected: isRejected)
         let sidecar = sidecarURL(for: url)
+
+        // Idempotency: if the existing sidecar already reflects the
+        // current rating + reject flag, skip the write entirely. This
+        // makes re-clicking Write Stars on already-saved ratings a
+        // no-op (no disk I/O, no mtime update, no Lightroom-side
+        // re-import churn). The mtime guard in readXMPSidecar treats
+        // newer-RAW vs. newer-sidecar as the staleness signal — by
+        // not bumping sidecar mtime when the content hasn't changed,
+        // we preserve the freshness comparison.
+        if let existing = readXMPSidecar(for: url),
+           existing.starRating == starRating,
+           existing.isRejected == isRejected {
+            return
+        }
+
+        let xmp = makeXMPContent(starRating: starRating, isRejected: isRejected)
         try xmp.write(to: sidecar, atomically: true, encoding: .utf8)
     }
 
