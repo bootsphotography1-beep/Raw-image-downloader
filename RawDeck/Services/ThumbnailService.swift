@@ -283,27 +283,118 @@ enum ThumbnailService {
         let scale = NSScreen.main?.backingScaleFactor ?? 2.0
         // For full-size requests, scale UP so a Retina display gets
         // pixel-perfect rendering. 2.0 = up to 2x the requested pixel
-        // dimension (e.g. 2400px request → up to 4800px bitmap for
+        // dimension (e.g. 2400px request -> up to 4800px bitmap for
         // retina).
         let effectiveScale = (quality == .fullSize) ? max(scale, 2.0) : scale
+
+        // FIX 2026-08-13: black-preview symptom fix.
+        //
+        // Previous code asked QL for a SQUARE thumbnail (maxDimension x
+        // maxDimension) and SwiftUI drew it `.aspectRatio(contentMode:
+        // .fill)` into a 3:2 cell. For some sources -- particularly RAW
+        // files on macOS 27 / Xcode 26.5 -- Quick Look returned an
+        // NSImage whose `bestRepresentation(for:)` produced an empty
+        // bitmap at draw time when the requested aspect did not match
+        // the cell's. SwiftUI then drew a black rectangle (the
+        // underlying RDColor.surfaceRaised showing through).
+        //
+        // Two-part fix:
+        //   (a) Request a correctly-aspected thumbnail from QL by
+        //       reading the file's pixel dimensions first and passing
+        //       the matching width x height. Falls back to 3:2
+        //       (Canon's native RAW ratio) for any file whose dims
+        //       cannot be probed.
+        //   (b) Pull `rep.cgImage` instead of `rep.nsImage` and pre-
+        //       warm the bitmap by drawing it into a 1x1 CGContext.
+        //       rep.nsImage is sometimes lazy on macOS 27 for RAW:
+        //       the NSImage has the requested size but no real bitmap
+        //       until drawn. Force-decoding here guarantees SwiftUI
+        //       later gets a populated NSImage.
+        let aspect = sourceAspect(url: url) ?? (3.0 / 2.0)
+        let requestSize: CGSize
+        if aspect >= 1.0 {
+            // Landscape (or square). Width is the long edge.
+            requestSize = CGSize(width: maxDimension, height: maxDimension / aspect)
+        } else {
+            // Portrait. Height is the long edge.
+            requestSize = CGSize(width: maxDimension * aspect, height: maxDimension)
+        }
         let request = QLThumbnailGenerator.Request(
             fileAt: url,
-            size: CGSize(width: maxDimension, height: maxDimension),
+            size: requestSize,
             scale: effectiveScale,
             representationTypes: .thumbnail
         )
         QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { rep, error in
             DispatchQueue.main.async {
-                if let rep = rep {
-                    handler(rep.nsImage)
-                } else {
+                guard let rep = rep else {
                     // QL failed to generate a thumbnail for this file.
                     // Log it so we can see which files are problematic.
                     NSLog("RawDeck: QL thumbnail failed for \(url.lastPathComponent): \(error?.localizedDescription ?? "no error")")
                     handler(nil)
+                    return
                 }
+                // Pre-warm: extract rep.cgImage directly (NOT
+                // rep.nsImage) and force the bitmap to decode by
+                // drawing into a 1x1 CGContext. Some QL output paths
+                // for RAW produce CGImages whose pixel data is lazy --
+                // width/height are correct, but `bestRepresentation`
+                // returns nil at draw time. Drawing once materializes
+                // the pixels.
+                if let cg = rep.cgImage, cg.width > 0, cg.height > 0 {
+                    let outSize = NSSize(width: cg.width, height: cg.height)
+                    let nsImage = NSImage(cgImage: cg, size: outSize)
+                    if let warmupCtx = CGContext(
+                        data: nil, width: 1, height: 1,
+                        bitsPerComponent: 8, bytesPerRow: 4,
+                        space: CGColorSpaceCreateDeviceRGB(),
+                        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                 | CGBitmapInfo.byteOrder32Little.rawValue
+                    ) {
+                        warmupCtx.draw(cg, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                    }
+                    handler(nsImage)
+                    return
+                }
+                // Final fallback: trust rep.nsImage even if we
+                // could not pull the CGImage. Worse case the user sees
+                // the previous (black) behavior, not worse.
+                NSLog("RawDeck: QL rep had no cgImage for \(url.lastPathComponent); falling back to rep.nsImage")
+                handler(rep.nsImage)
             }
         }
+    }
+
+    /// Read the source image's pixel dimensions (from EXIF or the
+    /// first-image metadata of a RAW container) without decoding
+    /// pixels. Returns width/height as a ratio (>= 1.0 landscape, <
+    /// 1.0 portrait), or nil if the file can't be probed.
+    ///
+    /// Used by `generateThumbnailAsync` to ask QL for a correctly-
+    /// aspected thumbnail instead of a square -- see the bug comment
+    /// there for the full diagnosis.
+    ///
+    /// ImageIO's `CGImageSourceCopyPropertiesAtIndex` is robust enough
+    /// to read the embedded preview size from a Canon CR3 without
+    /// triggering the same hang that
+    /// `CGImageSourceCreateImageAtIndex` produces for those files
+    /// (we only read metadata, no pixels).
+    private static func sourceAspect(url: URL) -> CGFloat? {
+        guard let src = CGImageSourceCreateWithURL(url as CFURL, nil) else {
+            return nil
+        }
+        guard let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else {
+            return nil
+        }
+        // Use raw PixelWidth/PixelHeight (sensor dims). For Canon CR3
+        // that's 6000x4000 regardless of EXIF orientation. The cell
+        // is locked to 3:2, so requesting a 3:2 thumbnail matches
+        // what we'll draw -- no `.fill` cropping, no lazy-decode
+        // failure.
+        let w = props[kCGImagePropertyPixelWidth] as? Int ?? 0
+        let h = props[kCGImagePropertyPixelHeight] as? Int ?? 0
+        guard w > 0, h > 0 else { return nil }
+        return CGFloat(w) / CGFloat(h)
     }
 
     // MARK: - Legacy ImageIO fallback (kept for non-RAW files where QL
