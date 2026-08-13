@@ -103,9 +103,8 @@ struct ThumbnailCell: View {
                         }
                     }
                 }
-                .frame(maxWidth: .infinity)
-                .aspectRatio(3.0/2.0, contentMode: .fill)
-                .clipped()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .aspectRatio(3.0/2.0, contentMode: .fit)
 
                 // Reject X — solid square in the top-right corner (not a
                 // rounded badge). Visual signal: "this is rejected" without
