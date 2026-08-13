@@ -320,7 +320,10 @@ struct LightboxStripCell: View {
                 Text(String(repeating: "★", count: photo.starRating))
                     .font(.system(size: 8, weight: .semibold, design: .monospaced))
                     .foregroundStyle(RDColor.starActive)
-                    .textShadow(.init(color: .black.opacity(0.8), radius: 1, x: 0, y: 0))
+                    // Shadow rather than textShadow: SwiftUI has no
+                    // .textShadow modifier (the earlier code was a v2
+                    // typo that failed to compile). Use plain shadow.
+                    .shadow(color: .black.opacity(0.8), radius: 1, x: 0, y: 0)
                     .padding(.bottom, 2)
                     .padding(.leading, 3)
             }
