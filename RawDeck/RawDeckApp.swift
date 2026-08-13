@@ -453,50 +453,145 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Pure event-handling logic, factored out of the `addLocalMonitor`
-    /// closure so the closure body stays short and the rule set can be
-    /// extended in one place. **Returns `nil` if the event was handled
-    /// (we want to swallow it)**, otherwise returns the event unchanged
-    /// so the rest of AppKit's responder chain processes it normally.
+    /// Pure event-handling logic, factored out of the `addLocalMonitor` closure
+    /// so the closure body stays short and the rule set can be extended in one
+    /// place. **Returns `nil` if the event was handled (we want to swallow it)**,
+    /// otherwise returns the event unchanged so the rest of AppKit's responder
+    /// chain processes it normally.
     ///
-    /// Key routing table:
+    /// Key routing table (extended 2026-08-13 to also cover keys the view-tree
+    /// .keyboardShortcut overlay silently no-ops after its first ~5 entries):
     ///
-    /// | Key | Mods                   | Mode     | Action                              |
-    /// |-----|------------------------|----------|-------------------------------------|
-    /// | "A" | .command (no others)   | .library | `store.selectAll()`                |
+    /// | Key             | Mods                       | Mode     | Action                          |
+    /// |-----------------|----------------------------|----------|---------------------------------|
+    /// | "A"             | .command (no others)       | .library | selectAll()                     |
+    /// | Space           | (no modifiers)             | .library | toggle lightbox                 |
+    /// | Left Arrow      | (no modifiers)             | .library | lightboxStep(-1)                |
+    /// | Right Arrow     | (no modifiers)             | .library | lightboxStep(+1)                |
+    /// | "X"             | (no modifiers)             | .library | toggle reject                   |
+    /// | "0"             | (no modifiers)             | .library | setRating(0)                    |
+    /// | Escape          | (no modifiers)             | .library | close lightbox / deselect all   |
+    /// | Delete          | (no modifiers)             | .library | trash selection                 |
+    /// | Forward Delete  | (no modifiers)             | .library | trash selection                 |
     ///
-    /// Why we **don't** actually return `nil` even on match: the
-    /// Swift 6 strict-concurrency checker requires `@MainActor`
-    /// isolation for `PhotoStore` access, which can't be guaranteed
-    /// inside this `@Sendable` closure on macOS 13 (no
-    /// `MainActor.assumeIsolated`). So we return the event unmodified
-    /// (the broken TSM dispatcher would no-op it anyway) and fire a
-    /// `Task { @MainActor in ... }` that does the actual work.
-    /// Idempotent if both fire (selectAll is a Set reassignment).
-    /// The result IS correct.
+    /// Why this is the SOLE dispatcher for those keys (vs. the view-tree
+    /// HiddenKeyButtons in ContentView): stacking 14+ HiddenKeyButton views
+    /// in a VStack inside an .overlay(...) causes only the first ~5 to
+    /// capture keys on macOS 27 / Xcode 26.5 -- the rest silently no-op
+    /// because SwiftUI's first-responder chain gives up after a few
+    /// candidates. Routing everything through this NSEvent monitor
+    /// bypasses that broken chain.
+    ///
+    /// Why we don't return `nil` even on match: the Swift 6 strict-
+    /// concurrency checker requires @MainActor isolation for PhotoStore
+    /// access, which can't be guaranteed inside this @Sendable closure
+    /// on macOS 13 (no MainActor.assumeIsolated). So we return the event
+    /// unmodified (the broken TSM dispatcher would no-op it anyway) and
+    /// fire a Task { @MainActor in ... } that does the actual work.
     nonisolated private static func handleLibraryKeyEvent(_ event: NSEvent) -> NSEvent? {
-        // Strict modifier check: only Cmd, no Shift / Option / Control.
-        // `deviceIndependentFlagsMask` strips caps-lock and similar
-        // device-specific flags so a Caps-Lock-A in library mode
-        // doesn't trigger a phantom select-all.
-        let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
-        guard mods == .command else { return event }
-        // Virtual key code 0 == kVK_ANSI_A. Use the integer literal
-        // instead of the Carbon constant — Carbon's C header symbol
-        // might also be subject to the same HIToolbox soft-linking
-        // failure, and a plain literal has no HIToolbox dependency.
-        guard event.keyCode == 0 else { return event }
+        // deviceIndependentFlagsMask strips caps-lock and similar device-
+        // specific flags. We also strip numeric-pad and function-key flags
+        // that vary across keyboard models.
+        let mods = event.modifierFlags
+            .intersection(.deviceIndependentFlagsMask)
+            .subtracting([.numericPad, .function])
+        let keyCode = event.keyCode
 
-        // Schedule the actual store call on the MainActor (read
-        // sharedStore + check mode + selectAll are all @MainActor-
-        // isolated). The keystroke dispatch chain is broken in this
-        // environment, so we don't bother trying to swallow the
-        // event from AppKit — letting it fall through is harmless.
-        Task { @MainActor in
-            guard let store = AppDelegate.sharedStore else { return }
-            guard store.mode == .library else { return }
-            store.selectAll()
+        // Schedule an action on the main actor. The store is read inside
+        // the dispatched task so we don't capture AppDelegate.sharedStore
+        // on this thread (it can be nil during quit-in-progress).
+        func dispatch(_ action: @escaping @MainActor () -> Void) {
+            Task { @MainActor in
+                guard let store = AppDelegate.sharedStore else { return }
+                guard store.mode == .library else { return }
+                action()
+            }
         }
+
+        // Cmd-A (keyCode 0) -- Select All.
+        if mods == .command, keyCode == 0 {
+            dispatch { AppDelegate.sharedStore?.selectAll() }
+            return event
+        }
+
+        // For everything below: only act on no-modifier keys. Plain keys
+        // (no Cmd/Shift/Option/Ctrl) are unlikely to collide with menu
+        // shortcuts, which is exactly what we want.
+        guard mods.isEmpty else { return event }
+
+        // Space (49) -- toggle lightbox. Two states: open if a photo is
+        // hovered in grid mode, close if already open.
+        if keyCode == 49 {
+            dispatch {
+                guard let store = AppDelegate.sharedStore else { return }
+                if store.lightboxPhotoID != nil {
+                    store.closeLightbox()
+                } else if let id = store.hoveredPhotoID,
+                          let p = store.photos.first(where: { $0.id == id }) {
+                    store.openLightbox(on: p)
+                }
+            }
+            return event
+        }
+
+        // Left (123) / Right (124) arrows -- navigate the lightbox. Only
+        // fire if the lightbox is actually open.
+        if keyCode == 123 || keyCode == 124 {
+            dispatch {
+                guard let store = AppDelegate.sharedStore else { return }
+                guard store.lightboxPhotoID != nil else { return }
+                store.lightboxStep(keyCode == 123 ? -1 : 1)
+            }
+            return event
+        }
+
+        // X (7) -- toggle reject on the rating target.
+        if keyCode == 7 {
+            dispatch {
+                guard let store = AppDelegate.sharedStore else { return }
+                if let target = store.ratingTarget {
+                    store.toggleReject(photo: target)
+                } else {
+                    store.toggleReject()
+                }
+            }
+            return event
+        }
+
+        // 0 (29) -- clear the rating.
+        if keyCode == 29 {
+            dispatch {
+                guard let store = AppDelegate.sharedStore else { return }
+                store.setRating(0, photo: store.ratingTarget)
+            }
+            return event
+        }
+
+        // Escape (53) -- close lightbox or deselect all.
+        if keyCode == 53 {
+            dispatch {
+                guard let store = AppDelegate.sharedStore else { return }
+                if store.lightboxPhotoID != nil {
+                    store.closeLightbox()
+                } else {
+                    store.deselectAll()
+                }
+            }
+            return event
+        }
+
+        // Delete (51, backspace) / Forward Delete (117, Fn+Delete).
+        // Trash the current selection (or all rejects if no selection).
+        if keyCode == 51 || keyCode == 117 {
+            dispatch {
+                guard let store = AppDelegate.sharedStore else { return }
+                guard !store.selectedIDs.isEmpty || store.rejectedCount > 0 else { return }
+                store.trashSelection()
+            }
+            return event
+        }
+
+        // Not one of our library keys -- pass through.
         return event
     }
 }
