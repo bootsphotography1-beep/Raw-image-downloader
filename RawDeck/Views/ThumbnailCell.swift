@@ -168,9 +168,20 @@ struct ThumbnailCell: View {
             }
             Divider()
             Button(role: .destructive) {
-                _ = ExternalAppService.moveToTrash(photo.url)
-                store.photos.removeAll { $0.id == photo.id }
-                store.selectedIDs = store.selectedIDs.intersection(Set(store.photos.map { $0.id }))
+                let result = ExternalAppService.moveToTrash(photo.url)
+                switch result {
+                case .success:
+                    // Photo is gone from disk — safe to remove from store.
+                    store.photos.removeAll { $0.id == photo.id }
+                    store.selectedIDs = store.selectedIDs.intersection(Set(store.photos.map { $0.id }))
+                case .failure(let reason):
+                    // Photo is STILL on disk — keep it in the store and tell
+                    // the user why. Without this surfacing, the user sees an
+                    // empty grid and assumes the file was deleted — but it's
+                    // still on the card, and they'd wonder why. Mirrors the
+                    // fix in PhotoStore.trashSelection's lightbox branch.
+                    store.alertMessage = "Couldn't trash \(photo.url.lastPathComponent): \(reason)"
+                }
             } label: {
                 Text("Move to Trash")
             }
