@@ -428,16 +428,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // React to backend switches (Settings → Sync picker).
             // Re-creating the coordinator is unnecessary — `start(in:)`
             // already tears down the prior watcher.
+            //
+            // Swift 6 strict-concurrency note: the
+            // `addObserver(forName:object:queue:using:)` closure is
+            // typed as `@Sendable`, which can't reference `@MainActor`
+            // state directly (the closure type doesn't carry the
+            // `@MainActor` isolation, even when `queue: .main` runs it
+            // on the main thread at runtime). Wrap the body in
+            // `Task { @MainActor in ... }` to hop onto MainActor —
+            // same pattern the NSEvent monitor above uses.
             NotificationCenter.default.addObserver(
                 forName: .syncBackendDidChange,
                 object: nil,
                 queue: .main
             ) { _ in
-                guard let settings = AppDelegate.sharedSyncSettings else { return }
-                let ok = coordinator.start(in: settings.active)
-                if !ok {
-                    NSLog("RawDeck: failed to switch backend to %@",
-                          settings.active.rawValue)
+                Task { @MainActor in
+                    guard let settings = AppDelegate.sharedSyncSettings else { return }
+                    let ok = coordinator.start(in: settings.active)
+                    if !ok {
+                        NSLog("RawDeck: failed to switch backend to %@",
+                              settings.active.rawValue)
+                    }
                 }
             }
         }
@@ -553,17 +564,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Left (123) / Right (124) arrows -- navigate the lightbox.
-        // If the lightbox is NOT open, the arrows do nothing (the grid
-        // scroll view wants them).
+        // If the lightbox is NOT open, the arrows pass through to the
+        // grid ScrollView. If it IS open, we swallow the event (return
+        // nil) so macOS doesn't beep when the user is at the first or
+        // last photo and the keystroke is a no-op.
         if keyCode == UInt16(123) || keyCode == UInt16(124) {
-            dispatch("Arrow lightboxStep") {
-                guard let store = AppDelegate.sharedStore else { return }
-                guard store.lightboxPhotoID != nil else {
-                    NSLog("RawDeck: arrow ignored -- lightbox not open")
-                    return
-                }
-                store.lightboxStep(keyCode == UInt16(123) ? -1 : 1)
+            // Synchronous read of `lightboxPhotoID`. The local-monitor
+            // closure runs on the main thread (AppKit guarantees this),
+            // so `MainActor.assumeIsolated` is safe — it lets us read
+            // the @MainActor-isolated `sharedStore` from this
+            // nonisolated function without a Swift 6 error.
+            let lightboxIsOpen = MainActor.assumeIsolated {
+                AppDelegate.sharedStore?.lightboxPhotoID != nil
             }
+            if lightboxIsOpen {
+                let step = keyCode == UInt16(123) ? -1 : 1
+                dispatch("Arrow lightboxStep") {
+                    guard let store = AppDelegate.sharedStore else { return }
+                    store.lightboxStep(step)
+                }
+                return nil   // consumed; macOS should not beep
+            }
+            // lightbox closed — let the event reach the ScrollView.
             return event
         }
 
