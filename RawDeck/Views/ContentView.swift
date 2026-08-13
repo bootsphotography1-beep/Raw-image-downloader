@@ -164,16 +164,6 @@ struct ContentView: View {
                         store.toggleReject()
                     }
                 }
-                HiddenKeyButton(key: .leftArrow, modifiers: []) {
-                    if store.lightboxPhotoID != nil {
-                        store.lightboxStep(-1)
-                    }
-                }
-                HiddenKeyButton(key: .rightArrow, modifiers: []) {
-                    if store.lightboxPhotoID != nil {
-                        store.lightboxStep(1)
-                    }
-                }
                 // Cmd-A: Select All. The Photo menu in RawDeckApp.swift
                 // also binds this shortcut, but a SwiftUI `CommandMenu`
                 // binding can silently no-op when the app's first-
