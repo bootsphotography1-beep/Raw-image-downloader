@@ -164,14 +164,6 @@ struct ContentView: View {
                         store.toggleReject()
                     }
                 }
-                HiddenKeyButton(key: .space, modifiers: []) {
-                    if store.lightboxPhotoID != nil {
-                        store.closeLightbox()
-                    } else if let id = store.hoveredPhotoID,
-                              let p = store.photos.first(where: { $0.id == id }) {
-                        store.openLightbox(on: p)
-                    }
-                }
                 HiddenKeyButton(key: .leftArrow, modifiers: []) {
                     if store.lightboxPhotoID != nil {
                         store.lightboxStep(-1)
