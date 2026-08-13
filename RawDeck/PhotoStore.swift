@@ -458,7 +458,15 @@ final class PhotoStore: ObservableObject {
     /// gets a brief alert summarizing how many orphans were removed.
     /// If zero orphans were found, the import just continues silently.
     func cleanupOrphanSidecars(in folder: URL) {
+        // Reference-type counter so the @Sendable detached Task body
+        // can mutate state without tripping Swift 6's "captured var
+        // in concurrent closure" error. Same pattern as
+        // trashSelection's `Counter` class.
+        final class Counter: @unchecked Sendable {
+            var orphanCount = 0
+        }
         Task.detached(priority: .utility) {
+            let counter = Counter()
             let fm = FileManager.default
             guard let entries = try? fm.contentsOfDirectory(
                 at: folder,
@@ -478,18 +486,21 @@ final class PhotoStore: ObservableObject {
             let presentStems = Set(entries
                 .filter { rawExts.contains($0.pathExtension.lowercased()) }
                 .map { $0.deletingPathExtension().lastPathComponent.lowercased() })
-            var orphanCount = 0
             for entry in entries where entry.pathExtension.lowercased() == "xmp" {
                 let stem = entry.deletingPathExtension().lastPathComponent.lowercased()
                 if !presentStems.contains(stem) {
                     if ExternalAppService.moveToTrash(entry) {
-                        orphanCount += 1
+                        counter.orphanCount += 1
                         NSLog("RawDeck: cleanupOrphanSidecars trashed \(entry.lastPathComponent)")
                     } else {
                         NSLog("RawDeck: cleanupOrphanSidecars failed to trash \(entry.lastPathComponent)")
                     }
                 }
             }
+            // Snapshot the counter into an immutable let before the
+            // MainActor hop. This is the same pattern trashSelection
+            // uses at line ~1067.
+            let orphanCount = counter.orphanCount
             if orphanCount > 0 {
                 await MainActor.run { [weak self] in
                     let plural = orphanCount == 1 ? "" : "s"
