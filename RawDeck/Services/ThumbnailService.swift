@@ -341,7 +341,22 @@ enum ThumbnailService {
                 // width/height are correct, but `bestRepresentation`
                 // returns nil at draw time. Drawing once materializes
                 // the pixels.
-                if let cg = rep.cgImage, cg.width > 0, cg.height > 0 {
+                // Pre-warm by extracting rep.cgImage directly (NOT
+                // rep.nsImage) and forcing the bitmap to decode via
+                // a 1x1 CGContext. Some QL output paths for RAW
+                // produce CGImages whose pixel data is lazy --
+                // width/height are correct, but `bestRepresentation`
+                // returns nil at draw time. Drawing once materializes
+                // the pixels.
+                //
+                // `rep.cgImage` is non-optional `CGImage` (not
+                // `CGImage?`) on this macOS / Xcode version, so we
+                // check dimensions directly rather than via `if let`.
+                // The earlier `if let cg = rep.cgImage, ...` form
+                // produced "Initializer for conditional binding must
+                // have Optional type, not 'CGImage'".
+                let cg = rep.cgImage
+                if cg.width > 0, cg.height > 0 {
                     let outSize = NSSize(width: cg.width, height: cg.height)
                     let nsImage = NSImage(cgImage: cg, size: outSize)
                     if let warmupCtx = CGContext(
@@ -356,10 +371,14 @@ enum ThumbnailService {
                     handler(nsImage)
                     return
                 }
-                // Final fallback: trust rep.nsImage even if we
-                // could not pull the CGImage. Worse case the user sees
+                // Final fallback: rep.cgImage had width/height of zero,
+                // which means we can't trust it -- the underlying bitmap
+                // may be lazy-corrupt. Hand back rep.nsImage as a best-
+                // effort result, but warn loudly because on macOS 27 +
+                // RAW this is the same condition that produces black
+                // thumbnails in the view tree. Worse case the user sees
                 // the previous (black) behavior, not worse.
-                NSLog("RawDeck: QL rep had no cgImage for \(url.lastPathComponent); falling back to rep.nsImage")
+                NSLog("RawDeck: QL rep.cgImage had zero dimensions for \(url.lastPathComponent); falling back to rep.nsImage")
                 handler(rep.nsImage)
             }
         }
