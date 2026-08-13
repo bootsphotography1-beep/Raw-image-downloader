@@ -106,15 +106,39 @@ enum ExternalAppService {
     }
 
     /// Move a file to the macOS Trash (recoverable from Trash, NOT deleted permanently).
-    /// Returns true on success.
+    /// Returns the trash outcome — either a success URL (for the caller to
+    /// log/inspect) or a string describing why the trash failed (so the
+    /// UI can surface "Read-only file system" or "Permission denied" to
+    /// the user instead of just "1 failed to move").
+    ///
+    /// Earlier versions returned `Bool` and discarded the underlying error,
+    /// leaving the user to guess why their trash failed. The most common
+    /// causes on macOS are:
+    ///   - **Read-only volume** (SD card mounted read-only, locked SD slot)
+    ///   - **Permission denied** (sandbox, ACL on the file)
+    ///   - **File in use** (open in another app, holds an exclusive lock)
+    ///   - **Item not found** (file disappeared between when the user
+    ///     selected it and when `trashItem` ran)
+    /// Surfacing the raw error string lets the user diagnose in seconds
+    /// rather than digging through Console.app.
+    enum TrashResult {
+        case success(URL)
+        case failure(String)
+    }
     @discardableResult
-    static func moveToTrash(_ url: URL) -> Bool {
+    static func moveToTrash(_ url: URL) -> TrashResult {
+        var resultURL: NSURL?
         do {
-            try FileManager.default.trashItem(at: url, resultingItemURL: nil)
-            return true
+            try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
+            if let resultURL = resultURL {
+                return .success(resultURL as URL)
+            }
+            // trashItem succeeded but no resulting URL was supplied (rare).
+            // Treat as success with the original URL.
+            return .success(url)
         } catch {
             NSLog("RawDeck: failed to trash \(url.lastPathComponent): \(error)")
-            return false
+            return .failure(error.localizedDescription)
         }
     }
 }

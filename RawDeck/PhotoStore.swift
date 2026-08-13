@@ -449,10 +449,11 @@ final class PhotoStore: ObservableObject {
         let sidecar = MetadataService.sidecarURL(for: url)
         Task.detached(priority: .utility) {
             if FileManager.default.fileExists(atPath: sidecar.path) {
-                if !ExternalAppService.moveToTrash(sidecar) {
-                    NSLog("RawDeck: sidecar trash failed for \(sidecar.lastPathComponent) (photo already gone from disk)")
-                } else {
+                switch ExternalAppService.moveToTrash(sidecar) {
+                case .success:
                     NSLog("RawDeck: cleaned up orphan sidecar \(sidecar.lastPathComponent) after photo removal")
+                case .failure(let reason):
+                    NSLog("RawDeck: sidecar trash failed for \(sidecar.lastPathComponent) (photo already gone from disk): \(reason)")
                 }
             }
         }
@@ -499,11 +500,12 @@ final class PhotoStore: ObservableObject {
             for entry in entries where entry.pathExtension.lowercased() == "xmp" {
                 let stem = entry.deletingPathExtension().lastPathComponent.lowercased()
                 if !presentStems.contains(stem) {
-                    if ExternalAppService.moveToTrash(entry) {
+                    switch ExternalAppService.moveToTrash(entry) {
+                    case .success:
                         counter.orphanCount += 1
                         NSLog("RawDeck: cleanupOrphanSidecars trashed \(entry.lastPathComponent)")
-                    } else {
-                        NSLog("RawDeck: cleanupOrphanSidecars failed to trash \(entry.lastPathComponent)")
+                    case .failure(let reason):
+                        NSLog("RawDeck: cleanupOrphanSidecars failed to trash \(entry.lastPathComponent): \(reason)")
                     }
                 }
             }
@@ -1041,8 +1043,12 @@ final class PhotoStore: ObservableObject {
             // the app that the operation had failed.
             Task { @MainActor [weak self] in
                 guard let self = self else { return }
-                guard ExternalAppService.moveToTrash(url) else {
-                    NSLog("RawDeck: lightbox trash failed for \(url.lastPathComponent); keeping in store")
+                switch ExternalAppService.moveToTrash(url) {
+                case .success:
+                    break  // fall through to removal below
+                case .failure(let reason):
+                    NSLog("RawDeck: lightbox trash failed for \(url.lastPathComponent); keeping in store: \(reason)")
+                    self.alertMessage = "Couldn't trash \(url.lastPathComponent): \(reason). The photo is still in the folder."
                     return
                 }
                 // Photo IS gone from disk — now safe to remove from the
@@ -1125,6 +1131,18 @@ final class PhotoStore: ObservableObject {
                 /// final hop runs with only the IDs that were actually
                 /// trashed, and the rest stay in `photos`.
                 var trashedIDs: [UUID] = []
+                /// First failure reason we hit in the loop. Only the
+                /// first is kept (we don't want to spam 200 identical
+                /// errors if every file fails with the same root cause
+                /// like "Read-only file system"). Surfaced in the final
+                /// alert so the user sees WHY the trash failed (e.g.
+                /// "the SD card is locked" or "file is in use by another
+                /// app") instead of just "1 failed to move". Without
+                /// this, the user has to dig into Console.app to find
+                /// out — which is exactly the gap that bit us when the
+                /// user reported "deleted from rawdeck but left on the
+                /// memory card".
+                var firstFailureReason: String? = nil
             }
             let counter = Counter()
 
@@ -1148,7 +1166,8 @@ final class PhotoStore: ObservableObject {
                 // bar; sidecar is a follower (its absence on disk
                 // isn't a failure — it's just a photo whose metadata
                 // hadn't been written yet).
-                if ExternalAppService.moveToTrash(url) {
+                switch ExternalAppService.moveToTrash(url) {
+                case .success:
                     counter.trashed += 1
                     counter.trashedIDs.append(trashedID)
                     // Best-effort sidecar follow-up. `sidecarURL(for:)`
@@ -1161,20 +1180,27 @@ final class PhotoStore: ObservableObject {
                     // log noise from `FileManager.trashItem` failing on
                     // a missing path.
                     if FileManager.default.fileExists(atPath: sidecar.path) {
-                        if !ExternalAppService.moveToTrash(sidecar) {
-                            // Sidecar trashing failed AFTER the photo
-                            // already moved. The user is left with an
-                            // orphan `.xmp` next to a deleted RAW; this
-                            // is recoverable manually from Finder but
-                            // ugly. Log so the user can grep Console.app
-                            // later. NOT counted as a photo failure —
-                            // the photo did go to Trash as requested.
-                            NSLog("RawDeck: sidecar trash failed for \(sidecar.lastPathComponent) (photo already trashed)")
+                        // Sidecar trashing failed AFTER the photo already
+                        // moved. The user is left with an orphan `.xmp`
+                        // next to a deleted RAW; this is recoverable
+                        // manually from Finder but ugly. Log so the user
+                        // can grep Console.app later. NOT counted as a
+                        // photo failure — the photo did go to Trash as
+                        // requested. We capture the reason instead of
+                        // discarding it so the final alert can name the
+                        // specific file that failed.
+                        switch ExternalAppService.moveToTrash(sidecar) {
+                        case .success:
+                            break
+                        case .failure(let sidecarReason):
+                            NSLog("RawDeck: sidecar trash failed for \(sidecar.lastPathComponent) (photo already trashed): \(sidecarReason)")
+                            counter.firstFailureReason = "sidecar \(sidecar.lastPathComponent): \(sidecarReason)"
                         }
                     }
-                } else {
+                case .failure(let reason):
                     counter.failed += 1
-                    NSLog("RawDeck: trash failed for \(url.lastPathComponent)")
+                    counter.firstFailureReason = "\(url.lastPathComponent): \(reason)"
+                    NSLog("RawDeck: trash failed for \(url.lastPathComponent): \(reason)")
                 }
                 // Publish progress every 5 files (or on the last one) so
                 // a 500-photo trash doesn't thrash MainActor with
@@ -1203,6 +1229,7 @@ final class PhotoStore: ObservableObject {
             let failed = counter.failed
             let wasCancelled = counter.wasCancelled
             let successfullyTrashedIDs = counter.trashedIDs
+            let firstFailureReason = counter.firstFailureReason
             await MainActor.run { [weak self] in
                 guard let self = self else { return }
                 // Bulk removal: only photos that ACTUALLY got trashed get
@@ -1237,6 +1264,15 @@ final class PhotoStore: ObservableObject {
                 }
                 if failed > 0 {
                     lines.append("\(failed) failed to move.")
+                    // One short reason line so the user can diagnose
+                    // without opening Console.app. We only show the
+                    // FIRST failure because (a) dozens of identical
+                    // SD-card-locked errors would just spam the alert,
+                    // and (b) the root cause is almost always the same
+                    // for every file in a single batch.
+                    if let reason = firstFailureReason {
+                        lines.append("Reason: \(reason)")
+                    }
                 }
                 self.alertMessage = lines.joined(separator: "\n")
             }
