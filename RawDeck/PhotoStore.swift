@@ -1306,6 +1306,110 @@ final class PhotoStore: ObservableObject {
     }
 
     }
+    // MARK: - Convert to JPG
+
+    /// Plain Sendable struct so we can publish convert progress into
+    /// `@Published` from `Task.detached` without tripping Swift 6
+    /// strict-concurrency warnings. Mirrors `ExportProgress`; the
+    /// status bar treats them uniformly.
+    struct ConvertProgress: Sendable, Equatable {
+        var done: Int
+        var total: Int
+    }
+
+    /// Track the most recent JPG-convert operation so the status bar
+    /// can show it. Non-nil while a convert is running, nil otherwise.
+    /// The status bar's ProgressView is hidden when this is nil —
+    /// same shape as `exportProgress` / `saveProgress`.
+    @Published var convertProgress: ConvertProgress? = nil
+
+    /// Batch-convert selected photos to JPG into a user-chosen
+    /// destination folder. Shows an NSOpenPanel directory picker,
+    /// then runs the conversions off-main and reports a summary.
+    ///
+    /// Selection model matches `exportSelection`:
+    /// - If photos are selected, those are converted.
+    /// - Otherwise, all VISIBLE photos are converted (post rating filter).
+    /// - No visible photos → alert and no-op.
+    ///
+    /// Decode path mirrors the lightbox (`ThumbnailService.generateFullPreview`):
+    /// `CIFilter(imageURL:)` for RAW, `CGImageSourceCreateImageAtIndex`
+    /// for JPEG/HEIC/TIFF/PNG. See `ConvertService` for the full
+    /// rationale (CR3 hangs on CGImageSource; CIRAWFilter is the path
+    /// Photos.app itself uses).
+    ///
+    /// Naming: JPG always lives next to the original stem; collisions
+    /// get `-1.jpg`, `-2.jpg`, … (Finder-style). Existing JPGs are
+    /// skipped unless `overwrite=true` (no UI for this yet — future
+    /// "refresh" command).
+    func convertSelection() {
+        let targets: [Photo] = {
+            let sel = selectedPhotos
+            return sel.isEmpty ? visiblePhotos : sel
+        }()
+        guard !targets.isEmpty else {
+            self.alertMessage = "Nothing to convert. Import a folder or select some photos first."
+            return
+        }
+
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "Choose destination folder"
+        panel.prompt = "Convert"
+        panel.message = "RawDeck will decode each RAW and write a .jpg alongside the original name. Existing .jpg files are skipped."
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+
+        let urls = targets.map { $0.url }
+        let total = urls.count
+        convertProgress = ConvertProgress(done: 0, total: total)
+
+        // Off-main so a 300-photo batch doesn't lock up the UI. Single
+        // CIContext shared across the whole batch (Metal device init
+        // is expensive; ConvertService holds it for the lifetime of the
+        // task).
+        Task.detached(priority: .userInitiated) { [weak self] in
+            // `ConvertService.convert` accumulates counts internally and
+            // returns the final `ConvertResult`. Per-file progress is
+            // published via the `onProgress` callback.
+            let result = ConvertService.convert(urls: urls, to: dest) { done in
+                // Throttle the MainActor hop — same %10 cadence as
+                // exportSelection. Final hop (done==total) fires
+                // unconditionally.
+                if done % 10 == 0 || done == total {
+                    Task { @MainActor [weak self] in
+                        self?.convertProgress = ConvertProgress(done: done, total: total)
+                    }
+                }
+            }
+
+            let converted = result.converted
+            let failed = result.failed
+            let skipped = result.skipped
+            let totalBytes = result.totalBytes
+            let firstError = result.firstError
+            await MainActor.run { [weak self] in
+                guard let self = self else { return }
+                self.convertProgress = nil
+                var lines: [String] = []
+                let plural = total == 1 ? "" : "s"
+                let mb = Double(totalBytes) / 1024.0 / 1024.0
+                lines.append("Converted \(converted) of \(total) photo\(plural) to \(dest.lastPathComponent)/ (\(String(format: "%.1f", mb)) MB)")
+                if skipped > 0 {
+                    lines.append("\(skipped) skipped (already existed).")
+                }
+                if failed > 0 {
+                    lines.append("\(failed) failed.")
+                    if let err = firstError {
+                        lines.append("First error: \(err)")
+                    }
+                }
+                self.alertMessage = lines.joined(separator: "\n")
+            }
+        }
+    }
+
     // MARK: - Save ratings and eject
 
     /// Plain Sendable struct so we can publish save progress into

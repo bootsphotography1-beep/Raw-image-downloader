@@ -112,7 +112,9 @@ struct RawDeckApp: App {
 
                 ExportCommand(store: store)
 
-                                SaveRatingsCommand(store: store)
+                ConvertCommand(store: store)
+
+                                    SaveRatingsCommand(store: store)
 
                                 Divider()
 
@@ -202,6 +204,27 @@ struct ExportCommand: View {
         .keyboardShortcut("e", modifiers: [.command, .option])
         .disabled(store.mode != .library || store.photos.isEmpty)
         .help("Copy selected photos to a folder of your choice, preserving the original .cr3 / .nef / .arw / .dng bytes (no re-encoding)")
+    }
+}
+
+/// Menu command for "Convert Selected to JPG…". Sits next to
+/// `ExportCommand` in the Photo menu. Same `@ObservedObject` pattern —
+/// `CommandMenu` lives outside the Window's view hierarchy, so
+/// `@EnvironmentObject` resolves to nil and crashes. Pass the store
+/// in as a constructor parameter instead.
+///
+/// Shortcut: ⌥⌘J. We pick ⌥⌘J (not ⌥⌘C) because ⌥⌘C is reserved by
+/// many system shortcuts (Show Colors, Copy formatting in some apps),
+/// and ⌥⌘J reads naturally as "convert to J-P-G".
+struct ConvertCommand: View {
+    @ObservedObject var store: PhotoStore
+    var body: some View {
+        Button("Convert Selected to JPG…") {
+            store.convertSelection()
+        }
+        .keyboardShortcut("j", modifiers: [.command, .option])
+        .disabled(store.mode != .library || store.photos.isEmpty)
+        .help("Decode selected RAWs and write .jpg files to a folder you choose (Apple RAW codec, sRGB, q=92). Original RAW bytes are not modified.")
     }
 }
 

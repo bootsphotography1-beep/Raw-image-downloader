@@ -125,6 +125,14 @@ struct ToolbarView: View {
             .help("Copy selected photos to a folder of your choice, preserving the original .cr3 / .nef / .arw / .dng bytes (no re-encoding)")
 
             Button {
+                store.convertSelection()
+            } label: {
+                Label("Convert", systemImage: "photo.fill.on.rectangle.fill")
+            }
+            .disabled(store.photos.isEmpty)
+            .help("Decode selected RAWs and write .jpg files to a folder you choose (Apple RAW codec, sRGB, q=92)")
+
+            Button {
                 NSLog("RawDeck: Write Stars button clicked; dirty=\(store.dirtyPhotoIDs.count)")
                 store.writeRatingsToMetadata { written, failed, firstError in
                     NSLog("RawDeck: Write Stars completion: written=\(written) failed=\(failed) err=\(firstError ?? "none")")

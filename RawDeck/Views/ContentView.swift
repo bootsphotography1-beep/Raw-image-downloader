@@ -272,6 +272,14 @@ struct StatusBarView: View {
             Text("Exporting \(prog.done) / \(prog.total)…")
                 .font(RDType.caption)
                 .foregroundStyle(RDColor.textSecondary)
+            } else if let prog = store.convertProgress {
+            ProgressView()
+                .controlSize(.small)
+                .tint(RDColor.accentPrimary)
+            Text("Converting \(prog.done) / \(prog.total)…")
+                .font(RDType.caption)
+                .foregroundStyle(RDColor.textSecondary)
+                .monospacedDigit()
             } else if let prog = store.saveProgress {
             ProgressView()
                 .controlSize(.small)
